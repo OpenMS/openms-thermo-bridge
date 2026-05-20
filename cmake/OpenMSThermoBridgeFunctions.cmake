@@ -26,7 +26,6 @@ function(openms_thermo_bridge_copy_runtime_files)
   endif()
 
   set(_openms_thermo_bridge_runtime_commands
-    COMMAND "${CMAKE_COMMAND}" -E rm -rf "$<TARGET_FILE_DIR:${ARG_TARGET}>/managed"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:${ARG_TARGET}>/managed"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory "${ARG_MANAGED_DIR}" "$<TARGET_FILE_DIR:${ARG_TARGET}>/managed")
   if(DotNetHost_RUNTIME_LIBRARY)
