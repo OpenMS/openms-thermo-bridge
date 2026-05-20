@@ -20,50 +20,22 @@ jobs:
           - os: windows-latest
             platform: win-x64
           - os: macos-latest
-            platform: osx-x64
+            platform: osx-arm64
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Set up .NET 8 SDK
-        if: runner.os != 'macOS'
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: Install .NET 8 SDK (macOS x64 workaround)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          curl -fsSL https://dot.net/v1/dotnet-install.sh -o "${RUNNER_TEMP}/dotnet-install.sh"
-          chmod +x "${RUNNER_TEMP}/dotnet-install.sh"
-          "${RUNNER_TEMP}/dotnet-install.sh" --channel 8.0 --architecture x64 --install-dir "${HOME}/.dotnet-x64"
-          "${HOME}/.dotnet-x64/dotnet" --info
-
-      - name: Configure .NET environment for macOS x64 workaround
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          echo "${HOME}/.dotnet-x64" >> "${GITHUB_PATH}"
-          echo "DOTNET_ROOT=${HOME}/.dotnet-x64" >> "${GITHUB_ENV}"
-          echo "DOTNET_ROOT_X64=${HOME}/.dotnet-x64" >> "${GITHUB_ENV}"
-          echo "DOTNET_MULTILEVEL_LOOKUP=0" >> "${GITHUB_ENV}"
-
-      - name: Configure (Linux / Windows)
-        if: runner.os != 'macOS'
+      - name: Configure
         shell: bash
         run: |
           cmake -S "${{ github.workspace }}" -B "${{ github.workspace }}/build" \
             -DOPENMS_THERMO_BRIDGE_ENABLE_VENDOR_DOWNLOAD=ON
-
-      - name: Configure (macOS x64 workaround)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          cmake -S "${{ github.workspace }}" -B "${{ github.workspace }}/build" \
-            -DOPENMS_THERMO_BRIDGE_ENABLE_VENDOR_DOWNLOAD=ON \
-            -DDOTNET_EXECUTABLE="${HOME}/.dotnet-x64/dotnet"
 
       - name: Build managed bridge
         shell: bash

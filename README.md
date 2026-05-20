@@ -12,15 +12,6 @@ A CMake-packaged native C++ bridge that embeds the .NET runtime, calls the offic
 ## Build
 The project does **not** download the Thermo vendor packages by default.
 
-### Apple Silicon macOS workaround
-Thermo RawFileReader currently works in this repository on Apple Silicon macOS only through an `osx-x64`/Rosetta workaround. On Apple Silicon, CMake enables `OPENMS_THERMO_BRIDGE_OSX_ARM64_X64_WORKAROUND=ON` by default, forces `x86_64` native targets, and publishes the managed bridge with `dotnet publish --os osx -a x64`.
-
-This workaround trades correctness for native performance: expect slower startup and RAW access under emulation. You can disable it with `-DOPENMS_THERMO_BRIDGE_OSX_ARM64_X64_WORKAROUND=OFF`, but current upstream Thermo packages are known to fail as native `osx-arm64` builds.
-
-You also need an `osx-x64` .NET 8 SDK/runtime available for both the build and the final executable. If it is not the default `dotnet` installation on your machine, set `DOTNET_ROOT_X64=/absolute/path/to/x64/dotnet` (or `DOTNET_ROOT`) so CMake and the embedded hostfxr loader can find the matching x64 `nethost` and runtime files.
-
-If Apple Silicon support matters to you, please track or upvote the upstream report at https://github.com/thermofisherlsms/RawFileReader/issues/3?issue=fgcz%7Crawrr%7C75 and consider contacting Thermo support to request native `osx-arm64` binaries.
-
 ### Option 1: provide the vendor `.nupkg` files yourself
 Place the following files in `vendor/thermo-feed` or point CMake at another directory with `-DOPENMS_THERMO_BRIDGE_VENDOR_DIR=/absolute/path`:
 - `ThermoFisher.CommonCore.BackgroundSubtraction.8.0.6.nupkg`
@@ -48,8 +39,6 @@ cmake --build build --parallel
 Pre-built managed artifacts for each platform are published as GitHub Release assets, so CMake does not need to run `dotnet publish` for `ThermoWrapperManaged.csproj`.
 The final executable still needs the .NET 8 **runtime** at runtime, and the native bridge build still needs the platform-specific `nethost` headers and library. In practice those `nethost` development files usually come from the .NET SDK/host pack rather than a runtime-only install.
 
-#### Manually download and unpack
-
 Download the zip for your platform from the [GitHub Releases page](https://github.com/jpfeuffer/openms-thermo-bridge/releases), unpack it, and point CMake at the extracted directory:
 
 ```bash
@@ -67,8 +56,6 @@ cmake -S . -B build \
   -DOPENMS_THERMO_BRIDGE_DOWNLOAD_PREBUILT_MANAGED=ON
 cmake --build build --parallel
 ```
-
-> **Note:** On Apple Silicon, pre-built artifacts are always `osx-x64` and run via Rosetta, consistent with the existing `OPENMS_THERMO_BRIDGE_OSX_ARM64_X64_WORKAROUND` behaviour. You still need an `osx-x64` .NET installation that provides the matching `nethost` files.
 
 For Linux convenience, `build_linux.sh` configures, builds, and runs the tests with the vendor-download option enabled.
 
@@ -136,7 +123,6 @@ If you bypass the helper and pass an explicit managed directory to `openms::ther
 - .NET 8 runtime for the final executable at runtime
 - A C++17 compiler
 - Network access to `api.nuget.org` and, when the relevant options are enabled, `raw.githubusercontent.com`
-- On Apple Silicon macOS, an `osx-x64` .NET 8 installation usable through Rosetta when the workaround is enabled
 - Pre-built artifact downloads (`OPENMS_THERMO_BRIDGE_DOWNLOAD_PREBUILT_MANAGED=ON`) additionally require network access to `github.com`
 
 ## Status

@@ -11,44 +11,19 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 option(OPENMS_THERMO_BRIDGE_BUILD_CLI "Build the thermo_host CLI executable." ON)
 option(OPENMS_THERMO_BRIDGE_ENABLE_VENDOR_DOWNLOAD "Download Thermo vendor packages during the build." OFF)
 set(OPENMS_THERMO_BRIDGE_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/thermo-feed" CACHE PATH "Directory containing the Thermo vendor .nupkg files.")
-set(OPENMS_THERMO_BRIDGE_THERMO_COMMIT "db08ff32cbb626d259b6d4d98492c83d6f2f6871" CACHE STRING "RawFileReader commit used for vendor package snapshots.")
-set(OPENMS_THERMO_BRIDGE_THERMO_VERSION "8.0.6" CACHE STRING "Thermo RawFileReader package version.")
+set(OPENMS_THERMO_BRIDGE_THERMO_COMMIT "80963674b5c10e58236da63023ad6fa0264bbb00" CACHE STRING "RawFileReader commit used for vendor package snapshots.")
+set(OPENMS_THERMO_BRIDGE_THERMO_VERSION "8.0.37" CACHE STRING "Thermo RawFileReader package version.")
 set(OPENMS_THERMO_BRIDGE_SAMPLE_RAW_URL "https://raw.githubusercontent.com/HegemanLab/small-thermo-raw-file-examples/cfac6a25b44913273dd458d5f5db9b20b0c1107d/ginkgotoxin-ms-positive.raw" CACHE STRING "Public sample RAW file used by the test suite.")
 option(OPENMS_THERMO_BRIDGE_DOWNLOAD_TEST_DATA "Download public sample RAW data when BUILD_TESTING is enabled." ON)
 set(OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR "" CACHE PATH "Path to a pre-built managed directory (skips dotnet publish).")
 option(OPENMS_THERMO_BRIDGE_DOWNLOAD_PREBUILT_MANAGED "Automatically download pre-built managed artifacts from GitHub Releases." OFF)
-set(_openms_thermo_bridge_osx_arm64_workaround_default OFF)
-if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
-  set(_openms_thermo_bridge_osx_arm64_workaround_default ON)
-endif()
-option(
-  OPENMS_THERMO_BRIDGE_OSX_ARM64_X64_WORKAROUND
-  "On Apple Silicon, build/publish x64 artifacts so Thermo RawFileReader can run through Rosetta."
-  ${_openms_thermo_bridge_osx_arm64_workaround_default})
-
-set(OPENMS_THERMO_BRIDGE_DOTNET_PUBLISH_ARGS)
-unset(OPENMS_THERMO_BRIDGE_DOTNET_HOST_RID_OVERRIDE CACHE)
-if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
-  if(OPENMS_THERMO_BRIDGE_OSX_ARM64_X64_WORKAROUND)
-    set(CMAKE_OSX_ARCHITECTURES "x86_64" CACHE STRING
-      "Build the native bridge as x86_64 on Apple Silicon so it can run via Rosetta with Thermo RawFileReader." FORCE)
-    set(OPENMS_THERMO_BRIDGE_DOTNET_PUBLISH_ARGS --os osx -a x64)
-    set(OPENMS_THERMO_BRIDGE_DOTNET_HOST_RID_OVERRIDE osx-x64 CACHE INTERNAL
-      "Override the nethost RID when using the Apple Silicon x64/Rosetta workaround.")
-    message(WARNING
-      "Apple Silicon workaround enabled: OpenMS Thermo Bridge will build and publish osx-x64 artifacts so Thermo "
-      "RawFileReader can run through Rosetta. Performance may be reduced under emulation. Please track or upvote "
-      "https://github.com/thermofisherlsms/RawFileReader/issues/3?issue=fgcz%7Crawrr%7C75 and contact Thermo support "
-      "if native osx-arm64 support matters for your workflow.")
-  else()
-    message(WARNING
-      "Native osx-arm64 builds are known to fail with Thermo RawFileReader. Enable "
-      "OPENMS_THERMO_BRIDGE_OSX_ARM64_X64_WORKAROUND for the Rosetta-based x64 workaround.")
-  endif()
-endif()
 
 if(NOT OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR AND NOT OPENMS_THERMO_BRIDGE_DOWNLOAD_PREBUILT_MANAGED)
-  find_program(DOTNET_EXECUTABLE NAMES dotnet REQUIRED)
+  find_program(DOTNET_EXECUTABLE NAMES dotnet
+    HINTS
+      "/opt/homebrew/opt/dotnet/bin"
+      "/opt/homebrew/bin"
+    REQUIRED)
   execute_process(
     COMMAND "${DOTNET_EXECUTABLE}" --list-sdks
     RESULT_VARIABLE OPENMS_THERMO_BRIDGE_DOTNET_SDK_LIST_RESULT
@@ -83,10 +58,10 @@ if(OPENMS_THERMO_BRIDGE_DOWNLOAD_PREBUILT_MANAGED AND NOT OPENMS_THERMO_BRIDGE_P
   if(WIN32)
     set(_openms_thermo_bridge_prebuilt_platform "win-x64")
   elseif(APPLE)
-    # Always use osx-x64 (Rosetta) artifact, matching the release workflow.
-    set(_openms_thermo_bridge_prebuilt_platform "osx-x64")
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
-      message(STATUS "OpenMSThermoBridge: Apple Silicon detected – downloading pre-built osx-x64 artifact (will run via Rosetta).")
+      set(_openms_thermo_bridge_prebuilt_platform "osx-arm64")
+    else()
+      set(_openms_thermo_bridge_prebuilt_platform "osx-x64")
     endif()
   else()
     set(_openms_thermo_bridge_prebuilt_platform "linux-x64")
@@ -151,23 +126,12 @@ if(OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR)
       "OpenMSThermoBridge: OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR is set to "
       "'${OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR}' but ThermoWrapperManaged.runtimeconfig.json was not found there.")
   endif()
-  if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
-    message(STATUS
-      "OpenMSThermoBridge: Using pre-built managed artifacts on Apple Silicon. "
-      "The pre-built artifact is osx-x64 and will run via Rosetta.")
-  endif()
   set(OPENMS_THERMO_BRIDGE_MANAGED_DIR "${OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR}")
   message(STATUS "OpenMSThermoBridge: Using pre-built managed directory: ${OPENMS_THERMO_BRIDGE_MANAGED_DIR}")
 endif()
 # ── End pre-built managed artifact support ────────────────────────────────────
 set(OPENMS_THERMO_BRIDGE_TEST_DATA_DIR "${CMAKE_CURRENT_BINARY_DIR}/testdata")
 set(OPENMS_THERMO_BRIDGE_NUGET_CONFIG "${CMAKE_CURRENT_BINARY_DIR}/OpenMSThermoBridge.NuGet.config")
-set(OPENMS_THERMO_BRIDGE_MANAGED_WARNING_COMMAND)
-if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$" AND OPENMS_THERMO_BRIDGE_OSX_ARM64_X64_WORKAROUND)
-  set(OPENMS_THERMO_BRIDGE_MANAGED_WARNING_COMMAND
-    COMMAND "${CMAKE_COMMAND}" -E cmake_echo_color --yellow
-            "Building osx-x64 managed artifacts for Rosetta compatibility on Apple Silicon; performance may be reduced under emulation.")
-endif()
 set(OpenMSThermoBridge_MANAGED_DIR "${OPENMS_THERMO_BRIDGE_MANAGED_DIR}" CACHE INTERNAL "Managed runtime directory for OpenMSThermoBridge.")
 
 if(NOT OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR)
@@ -203,12 +167,10 @@ if(NOT OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR)
   add_custom_command(
     OUTPUT ${OPENMS_THERMO_BRIDGE_MANAGED_FILES}
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${OPENMS_THERMO_BRIDGE_MANAGED_DIR}"
-    ${OPENMS_THERMO_BRIDGE_MANAGED_WARNING_COMMAND}
     COMMAND "${DOTNET_EXECUTABLE}" publish "${CMAKE_CURRENT_SOURCE_DIR}/ThermoWrapperManaged.csproj"
             -c Release
             --nologo
             --self-contained false
-            ${OPENMS_THERMO_BRIDGE_DOTNET_PUBLISH_ARGS}
             -o "${OPENMS_THERMO_BRIDGE_MANAGED_DIR}"
             --configfile "${OPENMS_THERMO_BRIDGE_NUGET_CONFIG}"
     DEPENDS openms_thermo_bridge_vendor_packages
