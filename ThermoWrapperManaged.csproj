@@ -2,6 +2,7 @@
   <PropertyGroup>
     <OutputType>Library</OutputType>
     <TargetFramework>net8.0</TargetFramework>
+    <RollForward>Major</RollForward>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Nullable>enable</Nullable>
     <EnableDynamicLoading>true</EnableDynamicLoading>
@@ -9,10 +10,10 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="ThermoFisher.CommonCore.BackgroundSubtraction" Version="8.0.6" />
-    <PackageReference Include="ThermoFisher.CommonCore.Data" Version="8.0.6" />
-    <PackageReference Include="ThermoFisher.CommonCore.MassPrecisionEstimator" Version="8.0.6" />
-    <PackageReference Include="ThermoFisher.CommonCore.RandomAccessReaderPlugin" Version="8.0.6" />
-    <PackageReference Include="ThermoFisher.CommonCore.RawFileReader" Version="8.0.6" />
+    <PackageReference Include="ThermoFisher.CommonCore.BackgroundSubtraction" Version="8.0.37" />
+    <PackageReference Include="ThermoFisher.CommonCore.Data" Version="8.0.37" />
+    <PackageReference Include="ThermoFisher.CommonCore.MassPrecisionEstimator" Version="8.0.37" />
+    <PackageReference Include="ThermoFisher.CommonCore.RandomAccessReaderPlugin" Version="8.0.37" />
+    <PackageReference Include="ThermoFisher.CommonCore.RawFileReader" Version="8.0.37" />
   </ItemGroup>
 </Project>

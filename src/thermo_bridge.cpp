@@ -24,7 +24,6 @@
 
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
-#include <sys/sysctl.h>
 #endif
 
 #if defined(__linux__)
@@ -213,14 +212,6 @@ std::filesystem::path hostfxr_path()
 
 std::filesystem::path discover_dotnet_root()
 {
-#if defined(__APPLE__) && defined(__x86_64__)
-    const char* dotnet_root_x64_env = std::getenv("DOTNET_ROOT_X64");
-    if (dotnet_root_x64_env != nullptr && dotnet_root_x64_env[0] != '\0')
-    {
-        std::filesystem::path root(dotnet_root_x64_env);
-        if (std::filesystem::is_directory(root)) return root;
-    }
-#endif
     const char* dotnet_root_env = std::getenv("DOTNET_ROOT");
     if (dotnet_root_env != nullptr && dotnet_root_env[0] != '\0')
     {
@@ -235,35 +226,6 @@ std::filesystem::path discover_dotnet_root()
     }
     catch (...) {}
     return {};
-}
-
-#if defined(__APPLE__)
-bool is_running_under_rosetta()
-{
-    int translated = 0;
-    std::size_t translated_size = sizeof(translated);
-    if (sysctlbyname("sysctl.proc_translated", &translated, &translated_size, nullptr, 0) != 0)
-        return false;
-    return translated == 1;
-}
-#endif
-
-void warn_about_emulation_if_needed()
-{
-#if defined(__APPLE__)
-    static std::once_flag warning_once;
-    std::call_once(warning_once, []()
-    {
-        if (is_running_under_rosetta())
-        {
-            std::cerr
-                << "[thermo_bridge] warning: running through Rosetta because Thermo RawFileReader does not yet have "
-                   "native osx-arm64 support. Expect slower performance under emulation. Track "
-                   "https://github.com/thermofisherlsms/RawFileReader/issues/3?issue=fgcz%7Crawrr%7C75 and contact "
-                   "Thermo support if native Apple Silicon support is important for your workflow.\n";
-        }
-    });
-#endif
 }
 
 #if defined(_WIN32)
@@ -304,8 +266,6 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (initialised_) return;
-
-        warn_about_emulation_if_needed();
 
         managed_directory_ = managed_directory;
         runtime_config_ = managed_directory / "ThermoWrapperManaged.runtimeconfig.json";

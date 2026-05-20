@@ -2,11 +2,11 @@ include(CMakeParseArguments)
 
 function(openms_thermo_bridge_vendor_package_names out_var)
   set(${out_var}
-    "ThermoFisher.CommonCore.BackgroundSubtraction.${OPENMS_THERMO_BRIDGE_THERMO_VERSION}.nupkg"
-    "ThermoFisher.CommonCore.Data.${OPENMS_THERMO_BRIDGE_THERMO_VERSION}.nupkg"
-    "ThermoFisher.CommonCore.MassPrecisionEstimator.${OPENMS_THERMO_BRIDGE_THERMO_VERSION}.nupkg"
-    "ThermoFisher.CommonCore.RandomAccessReaderPlugin.${OPENMS_THERMO_BRIDGE_THERMO_VERSION}.nupkg"
-    "ThermoFisher.CommonCore.RawfileReader.${OPENMS_THERMO_BRIDGE_THERMO_VERSION}.nupkg"
+    "thermofisher.commoncore.backgroundsubtraction.${OPENMS_THERMO_BRIDGE_THERMO_VERSION}.nupkg"
+    "thermofisher.commoncore.data.${OPENMS_THERMO_BRIDGE_THERMO_VERSION}.nupkg"
+    "thermofisher.commoncore.massprecisionestimator.${OPENMS_THERMO_BRIDGE_THERMO_VERSION}.nupkg"
+    "thermofisher.commoncore.randomaccessreaderplugin.${OPENMS_THERMO_BRIDGE_THERMO_VERSION}.nupkg"
+    "thermofisher.commoncore.rawfilereader.${OPENMS_THERMO_BRIDGE_THERMO_VERSION}.nupkg"
     PARENT_SCOPE)
 endfunction()
 
