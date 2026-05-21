@@ -221,9 +221,16 @@ std::filesystem::path hostfxr_path()
     const char* dotnet_root_env = std::getenv("DOTNET_ROOT");
     if (dotnet_root_env != nullptr && dotnet_root_env[0] != '\0')
     {
+        // Convert through std::filesystem::path so wchar_t is used on Windows.
+        const std::filesystem::path dotnet_root_path(dotnet_root_env);
+#if defined(_WIN32)
+        const std::wstring dotnet_root_native = dotnet_root_path.native();
+#else
+        const std::string dotnet_root_native = dotnet_root_path.native();
+#endif
         get_hostfxr_parameters params{};
         params.size = sizeof(params);
-        params.dotnet_root = dotnet_root_env;
+        params.dotnet_root = dotnet_root_native.c_str();
         if (get_hostfxr_path(buffer.data(), &buffer_size, &params) == 0)
             return std::filesystem::path(buffer.data());
         buffer = {};
