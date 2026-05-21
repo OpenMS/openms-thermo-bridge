@@ -1,5 +1,7 @@
 #pragma once
 
+#include "openms_thermo_bridge/openms_thermo_bridge_export.h"
+
 #include <cmath>
 #include <filesystem>
 #include <stdexcept>
@@ -12,10 +14,12 @@ namespace openms::thermo_bridge
 // ----------------------------------------------------------------
 //  Error type
 // ----------------------------------------------------------------
-class bridge_error : public std::runtime_error
+class OPENMS_THERMO_BRIDGE_EXPORT bridge_error : public std::runtime_error
 {
 public:
-    using std::runtime_error::runtime_error;
+    explicit bridge_error(const char* msg);
+    explicit bridge_error(const std::string& msg);
+    ~bridge_error() override;
 };
 
 // ----------------------------------------------------------------
@@ -41,11 +45,11 @@ struct ChromatogramData
 // ----------------------------------------------------------------
 
 /// Returns the managed runtime directory resolved from the executable/library layout.
-std::filesystem::path default_managed_directory();
+OPENMS_THERMO_BRIDGE_EXPORT std::filesystem::path default_managed_directory();
 
 /// Open, read scan count, close.  Throws bridge_error on failure.
-int get_scan_count(const std::filesystem::path& raw_file_path);
-int get_scan_count(const std::filesystem::path& raw_file_path,
+OPENMS_THERMO_BRIDGE_EXPORT int get_scan_count(const std::filesystem::path& raw_file_path);
+OPENMS_THERMO_BRIDGE_EXPORT int get_scan_count(const std::filesystem::path& raw_file_path,
                    const std::filesystem::path& managed_directory);
 
 // ----------------------------------------------------------------
@@ -64,7 +68,7 @@ int get_scan_count(const std::filesystem::path& raw_file_path,
 //    - File header (creation date, description, revision)
 //    - Sample information
 // ----------------------------------------------------------------
-class RawFile
+class OPENMS_THERMO_BRIDGE_EXPORT RawFile
 {
 public:
     /// Open a RAW file using the default managed directory.

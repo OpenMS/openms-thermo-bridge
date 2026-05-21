@@ -66,6 +66,15 @@ using fn_method               = int(*)(int, int, void*, int);         // H_GetIn
 
 namespace openms::thermo_bridge
 {
+
+// Out-of-line bridge_error constructors.  Defining them here (rather than
+// inline in the header) gives the class a key function, which anchors the
+// typeinfo/vtable to this translation unit and ensures they are exported from
+// the shared library regardless of the parent project's visibility settings.
+bridge_error::bridge_error(const char* msg) : std::runtime_error(msg) {}
+bridge_error::bridge_error(const std::string& msg) : std::runtime_error(msg) {}
+bridge_error::~bridge_error() = default;
+
 namespace
 {
 // ================================================================
@@ -205,8 +214,25 @@ std::filesystem::path hostfxr_path()
 {
     std::array<char_t, 4096> buffer{};
     std::size_t buffer_size = buffer.size();
+
+    // Honour DOTNET_ROOT when set — allows non-standard .NET installations
+    // (e.g. Homebrew on macOS arm64: /opt/homebrew/opt/dotnet/libexec) to be
+    // found without requiring the caller to have a standard system install.
+    const char* dotnet_root_env = std::getenv("DOTNET_ROOT");
+    if (dotnet_root_env != nullptr && dotnet_root_env[0] != '\0')
+    {
+        get_hostfxr_parameters params{};
+        params.size = sizeof(params);
+        params.dotnet_root = dotnet_root_env;
+        if (get_hostfxr_path(buffer.data(), &buffer_size, &params) == 0)
+            return std::filesystem::path(buffer.data());
+        buffer = {};
+        buffer_size = buffer.size();
+    }
+
     if (get_hostfxr_path(buffer.data(), &buffer_size, nullptr) != 0)
-        throw bridge_error("get_hostfxr_path failed");
+        throw bridge_error("get_hostfxr_path failed: .NET runtime not found in standard locations. "
+            "Set DOTNET_ROOT to your .NET installation directory (e.g. /opt/homebrew/opt/dotnet/libexec on macOS).");
     return std::filesystem::path(buffer.data());
 }
 

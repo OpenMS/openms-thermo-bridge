@@ -190,10 +190,26 @@ endif()
 add_library(openms_thermo_bridge src/thermo_bridge.cpp src/cv_mapping.cpp)
 add_library(OpenMSThermoBridge::openms_thermo_bridge ALIAS openms_thermo_bridge)
 
+# Generate a standard export header so the public API is visible from shared
+# library builds regardless of the parent project's visibility preset.
+include(GenerateExportHeader)
+generate_export_header(openms_thermo_bridge
+  EXPORT_MACRO_NAME     OPENMS_THERMO_BRIDGE_EXPORT
+  EXPORT_FILE_NAME      openms_thermo_bridge/openms_thermo_bridge_export.h
+  BASE_NAME             OPENMS_THERMO_BRIDGE)
+
+# Opt-in to hiding symbols by default so only OPENMS_THERMO_BRIDGE_EXPORT
+# symbols are exported.  Callers that set CMAKE_CXX_VISIBILITY_PRESET=hidden
+# (e.g. OpenMS) do not need to override the target's visibility manually.
+set_target_properties(openms_thermo_bridge PROPERTIES
+  CXX_VISIBILITY_PRESET     hidden
+  VISIBILITY_INLINES_HIDDEN ON)
+
 target_compile_features(openms_thermo_bridge PUBLIC cxx_std_17)
 target_include_directories(openms_thermo_bridge
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(openms_thermo_bridge PUBLIC DotNetHost::nethost)
 if(NOT WIN32)
@@ -257,6 +273,8 @@ install(TARGETS openms_thermo_bridge EXPORT OpenMSThermoBridgeTargets
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/" DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/openms_thermo_bridge/openms_thermo_bridge_export.h"
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/openms_thermo_bridge")
 install(DIRECTORY "${OPENMS_THERMO_BRIDGE_MANAGED_DIR}/" DESTINATION "${CMAKE_INSTALL_LIBDIR}/openms_thermo_bridge/managed")
 
 install(EXPORT OpenMSThermoBridgeTargets
