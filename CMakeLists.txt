@@ -211,7 +211,7 @@ target_include_directories(openms_thermo_bridge
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_link_libraries(openms_thermo_bridge PUBLIC DotNetHost::nethost)
+target_link_libraries(openms_thermo_bridge PRIVATE DotNetHost::nethost)
 if(NOT WIN32)
   target_link_libraries(openms_thermo_bridge PRIVATE ${CMAKE_DL_LIBS})
 endif()
