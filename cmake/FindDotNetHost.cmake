@@ -48,8 +48,19 @@ if(WIN32 AND DEFINED ENV{DOTNET_ROOT_x86} AND NOT "$ENV{DOTNET_ROOT_x86}" STREQU
   file(TO_CMAKE_PATH "$ENV{DOTNET_ROOT_x86}" _dotnet_root_x86_path)
   list(APPEND _dotnet_host_roots "${_dotnet_root_x86_path}")
 endif()
+
+# Ask the dotnet muxer itself where it lives, if one is on PATH.
+# This picks up apt (/usr/lib/dotnet), snap, and manual installs alike.
+find_program(_dotnet_exe NAMES dotnet)
+if(_dotnet_exe)
+  get_filename_component(_dotnet_exe_resolved "${_dotnet_exe}" REALPATH)
+  get_filename_component(_dotnet_exe_dir "${_dotnet_exe_resolved}" DIRECTORY)
+  list(APPEND _dotnet_host_roots "${_dotnet_exe_dir}")
+endif()
+
 foreach(candidate IN ITEMS
     "/usr/share/dotnet"
+    "/usr/lib/dotnet"
     "/usr/local/share/dotnet"
     "/opt/homebrew/share/dotnet"
     "/opt/homebrew/opt/dotnet/libexec"
