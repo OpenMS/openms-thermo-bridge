@@ -62,7 +62,7 @@ if(WIN32 AND DEFINED ENV{DOTNET_ROOT_x86} AND NOT "$ENV{DOTNET_ROOT_x86}" STREQU
 endif()
 
 # Ask the dotnet muxer itself where it lives, if one is on PATH.
-# This picks up apt (/usr/lib/dotnet), snap, and manual installs alike.
+# This picks up apt (/usr/lib/dotnet), and manual installs alike.
 find_program(_dotnet_exe NAMES dotnet)
 if(_dotnet_exe)
   get_filename_component(_dotnet_exe_resolved "${_dotnet_exe}" REALPATH)
