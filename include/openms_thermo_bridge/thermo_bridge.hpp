@@ -117,7 +117,7 @@ public:
     int ms_level(int scan_number) const;
     bool is_centroid_scan(int scan_number) const;
     std::string scan_filter(int scan_number) const;
-    int polarity(int scan_number) const;  // 0=positive, 1=negative
+    int polarity(int scan_number) const;  // 0=negative, 1=positive, 2=any
     std::string mass_analyzer_type(int scan_number) const;
     std::string ionization_mode(int scan_number) const;
 
@@ -168,6 +168,27 @@ public:
 
     int instrument_method_count() const;
     std::string instrument_method(int index = 0) const;
+
+    /// Versioned JSON metadata (schema 1); numeric values retain vendor units.
+    /// File properties, selected instrument/run, complete sample information, optional
+    /// instrument methods and source SHA-1. See docs/metadata.md for the schema.
+    std::string file_metadata_json(bool include_methods = true, bool checksum = false) const;
+
+    /// All scan statistics, reactions and trailer label/value pairs in one query.
+    std::string scan_metadata_json(int scan_number) const;
+
+    /// Optional arrays: 0=centroid charges, 1=noise masses, 2=noises, 3=baselines.
+    /// Charges refer to the native centroid stream; noise arrays have their own grid.
+    std::vector<double> spectrum_auxiliary_array(int scan_number, int array_kind) const;
+
+    /// Auxiliary detector channels, their units, and chromatograms (RT in minutes).
+    /// Does not change the selected controller. Includes UV/PDA/Analog/MSAnalog.
+    std::string detector_chromatograms_json() const;
+
+    /// Enumerate controllers by vendor Device enum (type values are included in file_metadata_json).
+    int instrument_count(int device_type) const;
+    /// Select a 1-based controller. All subsequent scan queries use that controller.
+    void select_instrument(int device_type, int instrument_number);
 
 private:
     int handle_ = 0;

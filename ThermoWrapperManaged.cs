@@ -39,8 +39,14 @@ namespace ThermoWrapperManaged
             var rawFile = RawFileReaderAdapter.FileFactory(filePath);
             if (rawFile == null || !rawFile.IsOpen || rawFile.IsError)
                 return Err.FileNotFound;
-            rawFile.SelectInstrument(Device.MS, 1);
             int handle = System.Threading.Interlocked.Increment(ref _nextHandle);
+            foreach (var device in RawBridge.SupportedDevices)
+            {
+                if (rawFile.GetInstrumentCountOfType(device) == 0) continue;
+                rawFile.SelectInstrument(device, 1);
+                RawBridge.SelectedControllers[handle] = (device, 1);
+                break;
+            }
             _files[handle] = rawFile;
             return handle;
         }
@@ -74,7 +80,7 @@ namespace ThermoWrapperManaged
     //     is truncated but the full required size is still returned
     //     so the caller can retry with a larger buffer.
     // ----------------------------------------------------------------
-    public static class RawBridge
+    public static partial class RawBridge
     {
         // =============================================================
         //  Legacy free-function – kept for backward compatibility.
@@ -99,7 +105,7 @@ namespace ThermoWrapperManaged
             using (rawFile)
             {
                 rawFile.SelectInstrument(Device.MS, 1);
-                return rawFile.RunHeader.LastSpectrum;
+                return rawFile.RunHeaderEx.SpectraCount;
             }
         }
 
@@ -135,7 +141,7 @@ namespace ThermoWrapperManaged
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static void CloseRawFileImpl(int handle) { FilePool.Close(handle); }
+        private static void CloseRawFileImpl(int handle) { MetadataCache.TryRemove(handle, out _); SelectedControllers.TryRemove(handle, out _); FilePool.Close(handle); }
 
         // =============================================================
         //  Run-header queries (int-returning)
@@ -181,7 +187,7 @@ namespace ThermoWrapperManaged
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static int H_GetScanCountImpl(IRawDataPlus rf) => rf.RunHeaderEx.LastSpectrum;
+        private static int H_GetScanCountImpl(IRawDataPlus rf) => rf.RunHeaderEx.SpectraCount;
 
         // =============================================================
         //  Run-header queries (double-returning)
@@ -402,7 +408,7 @@ namespace ThermoWrapperManaged
         {
             var filter = rf.GetFilterForScanNumber(scanNumber);
             if (filter == null) return Err.BadScan;
-            // 0 = Positive, 1 = Negative, 2 = Any (maps to PolarityType enum)
+            // Raw vendor enum: Negative = 0, Positive = 1, Any = 2.
             return (int)filter.Polarity;
         }
 
@@ -593,21 +599,23 @@ namespace ThermoWrapperManaged
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static int H_GetSpectrumPeakCountImpl(IRawDataPlus rf, int scanNumber, bool centroid)
         {
-            if (centroid)
-            {
-                var stream = rf.GetCentroidStream(scanNumber, false);
-                if (stream != null && stream.Length > 0) return stream.Length;
-                // Fall back to software centroiding
-                var scan = Scan.FromFile(rf, scanNumber);
-                if (scan == null) return 0;
-                var centroidScan = Scan.ToCentroid(scan);
-                return centroidScan?.CentroidScan?.Length ?? 0;
-            }
-            else
-            {
-                var scan = Scan.FromFile(rf, scanNumber);
-                return scan?.SegmentedScan?.PositionCount ?? 0;
-            }
+            return SpectrumArrays(rf, scanNumber, centroid).Masses.Length;
+        }
+
+        // Low-resolution scans can contain centroided segmented data without a
+        // centroid stream. Software centroiding also returns segmented data.
+        // Use the same selection for the size query and the following copy.
+        private static (double[] Masses, double[] Intensities) SpectrumArrays(IRawDataPlus rf, int scanNumber, bool centroid)
+        {
+            var scan = Scan.FromFile(rf, scanNumber);
+            if (centroid && scan.HasCentroidStream)
+                return (scan.CentroidScan.Masses, scan.CentroidScan.Intensities);
+
+            var segmented = scan.SegmentedScan;
+            if (centroid && segmented.PositionCount > 0 &&
+                rf.GetScanEventForScanNumber(scanNumber).ScanData == ThermoFisher.CommonCore.Data.FilterEnums.ScanDataType.Profile)
+                segmented = Scan.ToCentroid(scan).SegmentedScan;
+            return (segmented.Positions ?? Array.Empty<double>(), segmented.Intensities ?? Array.Empty<double>());
         }
 
         /// <summary>
@@ -630,36 +638,8 @@ namespace ThermoWrapperManaged
         private static int H_GetSpectrumDataImpl(IRawDataPlus rf, int scanNumber, bool centroid,
             IntPtr mzBuffer, IntPtr intBuffer, int bufferSize)
         {
-            double[]? masses;
-            double[]? intensities;
-
-            if (centroid)
-            {
-                var stream = rf.GetCentroidStream(scanNumber, false);
-                if (stream != null && stream.Length > 0)
-                {
-                    masses = stream.Masses;
-                    intensities = stream.Intensities;
-                }
-                else
-                {
-                    var scan = Scan.FromFile(rf, scanNumber);
-                    if (scan == null) return 0;
-                    var centroidScan = Scan.ToCentroid(scan);
-                    if (centroidScan?.CentroidScan == null) return 0;
-                    masses = centroidScan.CentroidScan.Masses;
-                    intensities = centroidScan.CentroidScan.Intensities;
-                }
-            }
-            else
-            {
-                var scan = Scan.FromFile(rf, scanNumber);
-                if (scan?.SegmentedScan == null) return 0;
-                masses = scan.SegmentedScan.Positions;
-                intensities = scan.SegmentedScan.Intensities;
-            }
-
-            if (masses == null || intensities == null) return 0;
+            var (masses, intensities) = SpectrumArrays(rf, scanNumber, centroid);
+            if (masses.Length != intensities.Length) throw new InvalidOperationException("Inconsistent spectrum array lengths");
             int count = Math.Min(masses.Length, bufferSize);
             Marshal.Copy(masses, 0, mzBuffer, count);
             Marshal.Copy(intensities, 0, intBuffer, count);

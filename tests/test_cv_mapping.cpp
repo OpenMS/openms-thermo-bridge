@@ -494,14 +494,14 @@ TEST_CASE("cv_detector_types: unknown instrument -> empty")
 
 TEST_CASE("cv_polarity: positive")
 {
-    auto t = cv_polarity(0);
+    auto t = cv_polarity(1);
     CHECK(t.accession == "MS:1000130");
     CHECK(t.name == "positive scan");
 }
 
 TEST_CASE("cv_polarity: negative")
 {
-    auto t = cv_polarity(1);
+    auto t = cv_polarity(0);
     CHECK(t.accession == "MS:1000129");
     CHECK(t.name == "negative scan");
 }
@@ -588,4 +588,10 @@ TEST_CASE("Metadata constants are accessible")
     CHECK(std::string(cv::pride_num_ms2) == "PRIDE:0000482");
     CHECK(std::string(cv::sample_name) == "MS:1000002");
     CHECK(std::string(cv::instrument_serial_number) == "MS:1000529");
+}
+
+TEST_CASE("cv_polarity: unspecified does not fabricate positive polarity")
+{
+    CHECK(cv_polarity(2).accession.empty());
+    CHECK(cv_polarity(-1).accession.empty());
 }

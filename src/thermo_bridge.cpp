@@ -447,10 +447,13 @@ std::string call_string_fn(FnType fn, int handle, ExtraArgs... extra)
 {
     // First call: discover size needed.
     int needed = fn(handle, extra..., nullptr, 0);
-    if (needed <= 0) return {};  // empty or error
+    check_int_result(needed, "string query");
+    if (needed == 0) return {};
     std::vector<char> buf(static_cast<std::size_t>(needed) + 1, '\0');
-    fn(handle, extra..., buf.data(), static_cast<int>(buf.size()));
-    return std::string(buf.data());
+    const int written = fn(handle, extra..., buf.data(), static_cast<int>(buf.size()));
+    check_int_result(written, "string query");
+    if (written > needed) throw bridge_error("String changed between size and data query");
+    return std::string(buf.data(), static_cast<std::size_t>(written));
 }
 
 } // anonymous namespace
@@ -915,10 +918,13 @@ std::vector<std::string> RawFile::trailer_extra_labels(int scan_number) const
 
     // First call: get total needed size.
     int needed = fn(handle_, scan_number, nullptr, 0);
-    if (needed <= 0) return {};
+    check_int_result(needed, "metadata query");
+    if (needed == 0) return {};
 
     std::vector<char> buf(static_cast<std::size_t>(needed) + 1, '\0');
-    fn(handle_, scan_number, buf.data(), static_cast<int>(buf.size()));
+    const int written = fn(handle_, scan_number, buf.data(), static_cast<int>(buf.size()));
+    check_int_result(written, "trailer labels");
+    if (written != needed) throw bridge_error("Trailer labels changed during query");
 
     // The buffer contains NUL-delimited labels.
     std::vector<std::string> labels;
@@ -939,10 +945,13 @@ std::string RawFile::trailer_extra_value(int scan_number, const std::string& key
     auto key_utf8 = make_utf8(key);
 
     int needed = fn(handle_, scan_number, key_utf8.data(), nullptr, 0);
-    if (needed <= 0) return {};
+    check_int_result(needed, "metadata query");
+    if (needed == 0) return {};
 
     std::vector<char> buf(static_cast<std::size_t>(needed) + 1, '\0');
-    fn(handle_, scan_number, key_utf8.data(), buf.data(), static_cast<int>(buf.size()));
+    const int written = fn(handle_, scan_number, key_utf8.data(), buf.data(), static_cast<int>(buf.size()));
+    check_int_result(written, "trailer value");
+    if (written > needed) throw bridge_error("Trailer value changed during query");
     return std::string(buf.data());
 }
 
@@ -960,11 +969,61 @@ std::string RawFile::instrument_method(int index) const
 {
     auto fn = Runtime::instance().resolve<fn_method>("H_GetInstrumentMethod");
     int needed = fn(handle_, index, nullptr, 0);
-    if (needed <= 0) return {};
+    check_int_result(needed, "metadata query");
+    if (needed == 0) return {};
 
     std::vector<char> buf(static_cast<std::size_t>(needed) + 1, '\0');
-    fn(handle_, index, buf.data(), static_cast<int>(buf.size()));
+    const int written = fn(handle_, index, buf.data(), static_cast<int>(buf.size()));
+    check_int_result(written, "instrument method");
+    if (written > needed) throw bridge_error("Instrument method changed during query");
     return std::string(buf.data());
+}
+
+std::string RawFile::file_metadata_json(bool include_methods, bool checksum) const
+{
+    auto fn = Runtime::instance().resolve<fn_str_from_int_int>("H_GetFileMetadata");
+    return call_string_fn(fn, handle_, (include_methods ? 1 : 0) | (checksum ? 2 : 0));
+}
+
+std::string RawFile::scan_metadata_json(int scan_number) const
+{
+    auto fn = Runtime::instance().resolve<fn_str_from_int_int>("H_GetScanMetadata");
+    return call_string_fn(fn, handle_, scan_number);
+}
+
+std::vector<double> RawFile::spectrum_auxiliary_array(int scan_number, int array_kind) const
+{
+    using fn_type = int(*)(int, int, int, void*, int);
+    auto fn = Runtime::instance().resolve<fn_type>("H_GetSpectrumAuxiliaryArray");
+    int count = fn(handle_, scan_number, array_kind, nullptr, 0);
+    check_int_result(count, "spectrum auxiliary array");
+    if (count == 0) return {};
+    std::vector<double> result(static_cast<std::size_t>(count));
+    int written = fn(handle_, scan_number, array_kind, result.data(), count);
+    check_int_result(written, "spectrum auxiliary array");
+    if (written != count) throw bridge_error("Auxiliary array changed during query");
+    return result;
+}
+
+std::string RawFile::detector_chromatograms_json() const
+{
+    auto fn = Runtime::instance().resolve<fn_str_from_int>("H_GetDetectorChromatograms");
+    return call_string_fn(fn, handle_);
+}
+
+int RawFile::instrument_count(int device_type) const
+{
+    auto fn = Runtime::instance().resolve<fn_int_from_int_int>("H_GetInstrumentCount");
+    int count = fn(handle_, device_type);
+    check_int_result(count, "instrument count");
+    return count;
+}
+
+void RawFile::select_instrument(int device_type, int instrument_number)
+{
+    using fn_type = int(*)(int, int, int);
+    auto fn = Runtime::instance().resolve<fn_type>("H_SelectInstrument");
+    check_int_result(fn(handle_, device_type, instrument_number), "select instrument");
 }
 
 } // namespace openms::thermo_bridge

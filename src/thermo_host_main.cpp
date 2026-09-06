@@ -8,7 +8,7 @@ int main(int argc, char* argv[])
 {
     if (argc < 2)
     {
-        std::cerr << "Usage: thermo_host <path/to/file.raw> [--summary]\n";
+        std::cerr << "Usage: thermo_host <path/to/file.raw> [--summary | --metadata]\n";
         return 1;
     }
 
@@ -16,6 +16,15 @@ int main(int argc, char* argv[])
 
     try
     {
+        if (argc >= 3 && std::string(argv[2]) == "--metadata")
+        {
+            openms::thermo_bridge::RawFile raw(argv[1]);
+            std::cout << raw.file_metadata_json(true, true) << '\n';
+            for (int scan = raw.first_scan_number(); scan <= raw.last_scan_number(); ++scan)
+                std::cout << raw.scan_metadata_json(scan) << '\n';
+            std::cout << raw.detector_chromatograms_json() << '\n';
+            return 0;
+        }
         if (!summary)
         {
             // Legacy behaviour: just print scan count.

@@ -130,3 +130,10 @@ If you bypass the helper and pass an explicit managed directory to `openms::ther
 - [x] Native C++ bridge library and CLI
 - [x] Catch2/CTest integration tests
 - [x] Exported CMake package config
+
+## mzML metadata API
+
+The bulk metadata API preserves full sample/run metadata, scan trailers, ordered
+MSn reactions, detector channels and independent noise arrays. See
+[the schema and usage notes](docs/metadata.md). For an inspectable JSON Lines
+snapshot, run `thermo_host input.raw --metadata`.
