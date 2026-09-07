@@ -1,4 +1,5 @@
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -288,7 +289,7 @@ TEST_CASE("RawFile scan_filter returns a non-empty filter string")
     CHECK(!filter.empty());
 }
 
-TEST_CASE("RawFile polarity returns 0 (positive) or 1 (negative)")
+TEST_CASE("RawFile polarity returns 0 (negative) or 1 (positive)")
 {
     TestFile tf;
     int first = tf.file->first_scan_number();
@@ -366,6 +367,33 @@ TEST_CASE("RawFile profile spectrum_data is larger than centroid")
     // Profile data should typically have more points than centroid.
     // In some edge cases they may be equal, but profile should never be less.
     CHECK(profile_count >= centroid_count);
+}
+
+TEST_CASE("Low-resolution MSn segmented centroids are retained")
+{
+    // Optional LTQ fixture, e.g. ThermoRawFileParserTest/Data/small.RAW.
+    const char* path = std::getenv("OPENMS_THERMO_BRIDGE_TEST_MSN_RAW");
+    if (!path || !*path) SKIP("Set OPENMS_THERMO_BRIDGE_TEST_MSN_RAW to an LTQ MSn RAW fixture");
+    openms::thermo_bridge::RawFile raw(path);
+    bool checked = false;
+    for (int scan = raw.first_scan_number(); scan <= raw.last_scan_number(); ++scan)
+    {
+        if (raw.ms_level(scan) < 2 || raw.mass_analyzer_type(scan) != "MassAnalyzerITMS") continue;
+        const auto acquired = raw.spectrum_data(scan, false);
+        if (acquired.mz.empty()) continue;
+        const auto centroid = raw.spectrum_data(scan, true);
+        REQUIRE(!centroid.mz.empty());
+        CHECK(centroid.mz.size() == centroid.intensities.size());
+        CHECK(raw.spectrum_peak_count(scan, true) == centroid.mz.size());
+        if (raw.is_centroid_scan(scan))
+        {
+            CHECK(centroid.mz == acquired.mz);
+            CHECK(centroid.intensities == acquired.intensities);
+        }
+        else CHECK(centroid.mz.size() <= acquired.mz.size());
+        checked = true;
+    }
+    REQUIRE(checked);
 }
 
 // ================================================================
@@ -685,4 +713,72 @@ TEST_CASE("Iterate all scans checking MS level and spectrum data")
     // (if not, at least one of them should be present)
     CHECK((ms1_count + ms2_count) == (last - first + 1));
     std::cerr << "[test] MS1 scans: " << ms1_count << ", MS2+ scans: " << ms2_count << "\n";
+}
+
+TEST_CASE("Bulk metadata preserves provenance and all trailer labels")
+{
+    TestFile tf;
+    const auto metadata = tf.file->file_metadata_json(false, false);
+    CHECK(metadata.find("\"schema_version\":1") != std::string::npos);
+    CHECK(metadata.find("\"instrument_methods\":[]") != std::string::npos);
+    CHECK(metadata.find("\"sha1\":null") != std::string::npos);
+    CHECK(metadata.find("\"injection volume\":1") != std::string::npos);
+    CHECK(metadata.find("\"creation_date\":\"2019-02-14T18:56:53.") != std::string::npos);
+    const int scan = tf.file->first_scan_number();
+    const auto scan_metadata = tf.file->scan_metadata_json(scan);
+    CHECK(scan_metadata.find("\"polarity\":1") != std::string::npos);
+    CHECK(scan_metadata.find("\"reactions\":[]") != std::string::npos);
+    for (const auto& label : tf.file->trailer_extra_labels(scan))
+    {
+        // Public fixture labels contain no JSON escape characters.
+        CHECK(scan_metadata.find("\"label\":\"" + label + "\"") != std::string::npos);
+    }
+}
+
+TEST_CASE("Controller discovery preserves the selected MS instrument")
+{
+    TestFile tf;
+    const auto before = tf.file->scan_metadata_json(tf.file->first_scan_number());
+    const auto traces = tf.file->detector_chromatograms_json();
+    CHECK(traces.find("\"chromatograms\":") != std::string::npos);
+    CHECK(tf.file->scan_metadata_json(tf.file->first_scan_number()) == before);
+    CHECK(tf.file->instrument_count(0) == tf.file->ms_instrument_count());
+    tf.file->select_instrument(0, 1);
+    CHECK(tf.file->scan_metadata_json(tf.file->first_scan_number()) == before);
+}
+
+TEST_CASE("Optional arrays use their own grid and invalid requests throw")
+{
+    TestFile tf;
+    const int scan = tf.file->first_scan_number();
+    const auto mz = tf.file->spectrum_auxiliary_array(scan, 1);
+    const auto noise = tf.file->spectrum_auxiliary_array(scan, 2);
+    const auto baseline = tf.file->spectrum_auxiliary_array(scan, 3);
+    CHECK(mz.size() == noise.size());
+    CHECK(mz.size() == baseline.size());
+    CHECK_THROWS_AS(tf.file->spectrum_auxiliary_array(scan, 99), openms::thermo_bridge::bridge_error);
+    CHECK_THROWS_AS(tf.file->scan_metadata_json(tf.file->last_scan_number() + 1), openms::thermo_bridge::bridge_error);
+    CHECK_THROWS_AS(tf.file->scan_filter(tf.file->last_scan_number() + 1), openms::thermo_bridge::bridge_error);
+}
+
+TEST_CASE("PDA spectra expose wavelength windows and controller native IDs")
+{
+    TestFile tf;
+    REQUIRE(tf.file->instrument_count(4) == 1); // Public fixture includes a PDA controller.
+    tf.file->select_instrument(4, 1);
+    CHECK(tf.file->scan_count() == 1500);
+    const int scan = tf.file->first_scan_number();
+    const auto metadata = tf.file->scan_metadata_json(scan);
+    INFO(metadata);
+    CHECK(metadata.find("controllerType=4 controllerNumber=1 scan=1") != std::string::npos);
+    CHECK(metadata.find("\"low_wavelength\":220") != std::string::npos);
+    CHECK(metadata.find("\"high_wavelength\":499") != std::string::npos);
+    const auto spectrum = tf.file->spectrum_data(scan, false);
+    REQUIRE(!spectrum.mz.empty());
+    CHECK(spectrum.mz.size() == spectrum.intensities.size());
+    CHECK(spectrum.mz.front() >= 220);
+    CHECK(spectrum.mz.back() <= 500);
+    const auto before = tf.file->scan_metadata_json(scan);
+    tf.file->detector_chromatograms_json();
+    CHECK(tf.file->scan_metadata_json(scan) == before);
 }

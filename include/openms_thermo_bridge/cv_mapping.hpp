@@ -8,6 +8,7 @@
 /// consumers — in particular OpenMS — can construct properly-annotated
 /// MSExperiment objects from the raw data returned by the thermo_bridge API.
 
+#include <openms_thermo_bridge/openms_thermo_bridge_export.h>
 #include <string>
 #include <vector>
 
@@ -44,7 +45,7 @@ struct CVParam
 
 /// Map a Thermo instrument model string to a PSI-MS accession + name.
 /// Falls back to MS:1000483 ("Thermo Fisher Scientific instrument model").
-CVTerm cv_instrument_model(const std::string& model);
+OPENMS_THERMO_BRIDGE_EXPORT CVTerm cv_instrument_model(const std::string& model);
 
 // ================================================================
 //  Mass analyzer -> PSI-MS accession
@@ -55,20 +56,20 @@ CVTerm cv_instrument_model(const std::string& model);
 //  FT-ICR (MS:1000079) from Orbitrap (MS:1000484).
 // ================================================================
 
-CVTerm cv_mass_analyzer(const std::string& analyzer_type,
+OPENMS_THERMO_BRIDGE_EXPORT CVTerm cv_mass_analyzer(const std::string& analyzer_type,
                         const std::string& instrument_model = {});
 
 // ================================================================
 //  Ionization mode -> PSI-MS accession
 // ================================================================
 
-CVTerm cv_ionization_mode(const std::string& ionization_type);
+OPENMS_THERMO_BRIDGE_EXPORT CVTerm cv_ionization_mode(const std::string& ionization_type);
 
 // ================================================================
 //  Activation / dissociation type -> PSI-MS accession
 // ================================================================
 
-CVTerm cv_activation_type(const std::string& activation_type);
+OPENMS_THERMO_BRIDGE_EXPORT CVTerm cv_activation_type(const std::string& activation_type);
 
 // ================================================================
 //  Detector type for an instrument model -> PSI-MS accession(s)
@@ -76,7 +77,7 @@ CVTerm cv_activation_type(const std::string& activation_type);
 //  Some instruments have multiple detectors (e.g. Orbitrap ID-X).
 // ================================================================
 
-std::vector<CVTerm> cv_detector_types(const std::string& instrument_model);
+OPENMS_THERMO_BRIDGE_EXPORT std::vector<CVTerm> cv_detector_types(const std::string& instrument_model);
 
 // ================================================================
 //  PSI-MS accession constants — Spectrum types
@@ -247,10 +248,11 @@ inline constexpr const char* mass_resolution           = "MS:1000011";
 
 inline CVTerm cv_polarity(int polarity)
 {
-    if (polarity == 0)
+    if (polarity == 1)
         return {"MS:1000130", "MS", "positive scan", ""};
-    else
+    if (polarity == 0)
         return {"MS:1000129", "MS", "negative scan", ""};
+    return {}; // Any/unknown must not be asserted as a positive or negative scan.
 }
 
 // ================================================================

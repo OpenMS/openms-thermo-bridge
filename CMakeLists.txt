@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(OpenMSThermoBridge VERSION 0.2.3 LANGUAGES CXX)
+project(OpenMSThermoBridge VERSION 0.3.0 LANGUAGES CXX)
 
 include(CTest)
 include(CMakePackageConfigHelpers)
@@ -71,7 +71,7 @@ if(OPENMS_THERMO_BRIDGE_DOWNLOAD_PREBUILT_MANAGED AND NOT OPENMS_THERMO_BRIDGE_P
   set(_openms_thermo_bridge_prebuilt_zip_name
       "openms-thermo-bridge-managed-${_openms_thermo_bridge_prebuilt_platform}-${_openms_thermo_bridge_prebuilt_tag}.zip")
   set(_openms_thermo_bridge_prebuilt_url
-      "https://github.com/jpfeuffer/openms-thermo-bridge/releases/download/${_openms_thermo_bridge_prebuilt_tag}/${_openms_thermo_bridge_prebuilt_zip_name}")
+      "https://github.com/OpenMS/openms-thermo-bridge/releases/download/${_openms_thermo_bridge_prebuilt_tag}/${_openms_thermo_bridge_prebuilt_zip_name}")
   set(_openms_thermo_bridge_prebuilt_zip
       "${CMAKE_CURRENT_BINARY_DIR}/prebuilt-managed/${_openms_thermo_bridge_prebuilt_zip_name}")
   set(_openms_thermo_bridge_prebuilt_extract_dir
@@ -176,6 +176,7 @@ if(NOT OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR)
     DEPENDS openms_thermo_bridge_vendor_packages
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoWrapperManaged.csproj"
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoWrapperManaged.cs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/ThermoMetadata.cs"
             "${OPENMS_THERMO_BRIDGE_NUGET_CONFIG}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Publishing managed Thermo bridge"
