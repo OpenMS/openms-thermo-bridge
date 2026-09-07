@@ -60,10 +60,10 @@ all scan snapshots of the default controller, then detector chromatograms.
 The full sample and method snapshots can contain instrument paths and user
 entered text; callers can omit methods and SHA-1 using the API flags.
 
-Build the managed and native components from the same revision. Until a 0.3.0
-release artifact is published, use the .NET 8 SDK source build or supply a
-matching `OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR`; old managed DLLs do not
-contain the new entry points.
+Build the managed and native components from the same revision, or use the
+matching v0.3.0 pre-built managed artifact via
+`OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR`; older managed DLLs do not contain
+the new entry points.
 
 ## Low-resolution spectrum regression test
 

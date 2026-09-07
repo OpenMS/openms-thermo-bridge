@@ -39,7 +39,7 @@ cmake --build build --parallel
 Pre-built managed artifacts for each platform are published as GitHub Release assets, so CMake does not need to run `dotnet publish` for `ThermoWrapperManaged.csproj`.
 The final executable still needs the .NET 8 **runtime** at runtime, and the native bridge build still needs the platform-specific `nethost` headers and library. In practice those `nethost` development files usually come from the .NET SDK/host pack rather than a runtime-only install.
 
-Download the zip for your platform from the [GitHub Releases page](https://github.com/jpfeuffer/openms-thermo-bridge/releases), unpack it, and point CMake at the extracted directory:
+Download the zip for your platform from the [GitHub Releases page](https://github.com/OpenMS/openms-thermo-bridge/releases), unpack it, and point CMake at the extracted directory:
 
 ```bash
 cmake -S . -B build \
@@ -85,7 +85,7 @@ Scan count: 90
 ### FetchContent / add_subdirectory
 ```cmake
 FetchContent_Declare(OpenMSThermoBridge
-  GIT_REPOSITORY https://github.com/jpfeuffer/openms-thermo-bridge.git
+  GIT_REPOSITORY https://github.com/OpenMS/openms-thermo-bridge.git
   GIT_TAG main)
 FetchContent_MakeAvailable(OpenMSThermoBridge)
 
