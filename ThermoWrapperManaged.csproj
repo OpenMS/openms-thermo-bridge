@@ -16,4 +16,9 @@
     <PackageReference Include="ThermoFisher.CommonCore.RandomAccessReaderPlugin" Version="8.0.37" />
     <PackageReference Include="ThermoFisher.CommonCore.RawFileReader" Version="8.0.37" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The licenses of the bridge, of the open-source assemblies the packages above bring along,
+         and of nethost; published next to the assemblies. Update it when these packages change. -->
+    <None Include="THIRD-PARTY-NOTICES.txt" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

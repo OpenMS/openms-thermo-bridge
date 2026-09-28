@@ -177,6 +177,7 @@ if(NOT OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR)
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoWrapperManaged.csproj"
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoWrapperManaged.cs"
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoMetadata.cs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt"
             "${OPENMS_THERMO_BRIDGE_NUGET_CONFIG}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Publishing managed Thermo bridge"

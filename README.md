@@ -125,6 +125,13 @@ If you bypass the helper and pass an explicit managed directory to `openms::ther
 - Network access to `api.nuget.org` and, when the relevant options are enabled, `raw.githubusercontent.com`
 - Pre-built artifact downloads (`OPENMS_THERMO_BRIDGE_DOWNLOAD_PREBUILT_MANAGED=ON`) additionally require network access to `github.com`
 
+## Licenses
+The bridge is licensed under the BSD 3-Clause License (`LICENSE`). `THIRD-PARTY-NOTICES.txt` lists
+the licenses of the open-source assemblies that are published with the managed bridge and of
+`nethost`, which the native library links; `dotnet publish` puts it into the managed output folder,
+and so into the release archives. The Thermo Fisher assemblies are licensed under the RawFileReader
+license (`License.doc` in https://github.com/thermofisherlsms/RawFileReader).
+
 ## Status
 - [x] Linux, macOS, and Windows CMake builds
 - [x] Native C++ bridge library and CLI
