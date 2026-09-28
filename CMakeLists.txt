@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(OpenMSThermoBridge VERSION 0.3.0 LANGUAGES CXX)
+project(OpenMSThermoBridge VERSION 0.3.1 LANGUAGES CXX)
 
 include(CTest)
 include(CMakePackageConfigHelpers)
@@ -177,6 +177,7 @@ if(NOT OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR)
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoWrapperManaged.csproj"
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoWrapperManaged.cs"
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoMetadata.cs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt"
             "${OPENMS_THERMO_BRIDGE_NUGET_CONFIG}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Publishing managed Thermo bridge"
