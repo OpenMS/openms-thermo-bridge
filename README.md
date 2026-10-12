@@ -257,7 +257,7 @@ documented by Thermo, so this feature may break with a vendor package update.
   the standard credential chain, plus `AWS_REGION` and `AWS_ENDPOINT_URL` for
   MinIO and similar services. This adds about 3.5 MB of managed DLLs.
 - Tuning and diagnostic environment variables (`THERMO_BRIDGE_REMOTE_BLOCK_KB`,
-  `_REGION_KB`, `_CACHE_MB`, `_READAHEAD_KB`, `_PARALLEL`, `_STATS`, ...) are documented at the top
+  `_CACHE_MB`, `_READAHEAD_KB`, `_PARALLEL`, `_STATS`, ...) are documented at the top
   of `RemoteRawAccess.cs`. `THERMO_BRIDGE_FORCE_RANGE_READER=1` routes local
   files through the same code path for testing.
 - `tools/range_http_server.py` is a small Range-capable test server with optional
