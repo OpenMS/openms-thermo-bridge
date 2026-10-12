@@ -38,8 +38,25 @@ namespace ThermoWrapperManaged
     internal sealed class SharedFile
     {
         public readonly IRawFileThreadManager Manager;
+        public readonly Remote.RemoteFile? Remote;
         public int References;
-        public SharedFile(IRawFileThreadManager manager) { Manager = manager; References = 1; }
+        public SharedFile(IRawFileThreadManager manager, Remote.RemoteFile? remote = null)
+        {
+            Manager = manager; Remote = remote; References = 1;
+        }
+
+        public void Dispose()
+        {
+            try { Manager.Dispose(); }
+            finally
+            {
+                if (Remote != null)
+                {
+                    ThermoWrapperManaged.Remote.RemoteViewCollectionManager.Instance.Unregister(Remote);
+                    Remote.Dispose();
+                }
+            }
+        }
     }
 
     internal sealed class OpenFile
@@ -56,25 +73,65 @@ namespace ThermoWrapperManaged
         private static readonly ConcurrentDictionary<int, OpenFile> _files = new();
         private static int _nextHandle = 0;
 
+        /// True when the path is opened through the range reader (http(s)://, s3://, or
+        /// THERMO_BRIDGE_FORCE_RANGE_READER=1 for local files).
+        public static bool UsesRangeReader(string filePath) =>
+            Remote.RangeSource.IsRemote(filePath)
+            || Environment.GetEnvironmentVariable("THERMO_BRIDGE_FORCE_RANGE_READER") == "1";
+
+        private static readonly object _registerLock = new();
+
         public static int Open(string filePath)
         {
-            var manager = RawFileReaderAdapter.ThreadedFileFactory(filePath);
-            if (manager == null) return Err.FileNotFound;
+            Remote.RemoteFile? remote = null;
+            IRawFileThreadManager? manager;
+            if (UsesRangeReader(filePath))
+            {
+                var source = Remote.RangeSource.Create(filePath);
+                lock (_registerLock)
+                {
+                    // The registered name becomes IRawDataPlus.FileName: the URL without its query
+                    // string (no presigned credentials), made unique per open.
+                    string name = Remote.RangeSource.IsRemote(filePath) ? source.Description : filePath;
+                    for (int i = 2; Remote.RemoteViewCollectionManager.Instance.IsRegistered(name); i++)
+                        name = (Remote.RangeSource.IsRemote(filePath) ? source.Description : filePath) + "#" + i;
+                    remote = new Remote.RemoteFile(name, source);
+                    Remote.RemoteViewCollectionManager.Instance.Register(remote);
+                }
+                manager = RawFileReaderAdapter.RandomAccessThreadedFileFactory(remote.Name, Remote.RemoteViewCollectionManager.Instance);
+            }
+            else if (Environment.GetEnvironmentVariable("THERMO_BRIDGE_FORCE_VENDOR_PLUGIN") == "1")
+            {
+                // Diagnostic only: Thermo's own random-access plug-in on a local file, to separate
+                // the cost of the vendor random-access code path from that of the range reader.
+                manager = RawFileReaderAdapter.RandomAccessThreadedFileFactory(filePath,
+                    ThermoFisher.CommonCore.RandomAccessReaderPlugin.RandomAccessFileManager.Instance);
+            }
+            else
+            {
+                manager = RawFileReaderAdapter.ThreadedFileFactory(filePath);
+            }
+            var shared = manager == null ? null : new SharedFile(manager, remote);
+            if (shared == null)
+            {
+                if (remote != null) { Remote.RemoteViewCollectionManager.Instance.Unregister(remote); remote.Dispose(); }
+                return Err.FileNotFound;
+            }
             IRawDataPlus? rawFile = null;
             try
             {
-                rawFile = manager.CreateThreadAccessor();
+                rawFile = shared.Manager.CreateThreadAccessor();
                 if (rawFile == null || !rawFile.IsOpen || rawFile.IsError)
                 {
                     rawFile?.Dispose();
-                    manager.Dispose();
+                    shared.Dispose();
                     return Err.FileNotFound;
                 }
             }
             catch
             {
                 rawFile?.Dispose();
-                manager.Dispose();
+                shared.Dispose();
                 throw;
             }
             int handle = System.Threading.Interlocked.Increment(ref _nextHandle);
@@ -85,7 +142,7 @@ namespace ThermoWrapperManaged
                 RawBridge.SelectedControllers[handle] = (device, 1);
                 break;
             }
-            _files[handle] = new OpenFile(rawFile, new SharedFile(manager));
+            _files[handle] = new OpenFile(rawFile, shared);
             return handle;
         }
 
@@ -142,7 +199,7 @@ namespace ThermoWrapperManaged
         {
             bool dispose;
             lock (shared) { dispose = --shared.References == 0; }
-            if (dispose) shared.Manager.Dispose();
+            if (dispose) shared.Dispose();
         }
     }
 
@@ -201,7 +258,8 @@ namespace ThermoWrapperManaged
             try
             {
                 string? filePath = Marshal.PtrToStringUTF8(filePathPtr);
-                if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) return Err.FileNotFound;
+                if (string.IsNullOrWhiteSpace(filePath)) return Err.FileNotFound;
+                if (!Remote.RangeSource.IsRemote(filePath) && !File.Exists(filePath)) return Err.FileNotFound;
                 return OpenRawFileImpl(filePath);
             }
             catch (Exception) { return Err.Exception; }

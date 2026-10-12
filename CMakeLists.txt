@@ -17,6 +17,7 @@ set(OPENMS_THERMO_BRIDGE_THERMO_VERSION "8.0.37" CACHE STRING "Thermo RawFileRea
 set(OPENMS_THERMO_BRIDGE_SAMPLE_RAW_URL "https://raw.githubusercontent.com/HegemanLab/small-thermo-raw-file-examples/cfac6a25b44913273dd458d5f5db9b20b0c1107d/ginkgotoxin-ms-positive.raw" CACHE STRING "Public sample RAW file used by the test suite.")
 option(OPENMS_THERMO_BRIDGE_DOWNLOAD_TEST_DATA "Download public sample RAW data when BUILD_TESTING is enabled." ON)
 set(OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR "" CACHE PATH "Path to a pre-built managed directory (skips dotnet publish).")
+option(OPENMS_THERMO_BRIDGE_ENABLE_S3 "Experimental: sign s3:// reads with the AWS SDK (adds AWSSDK.S3 to the managed payload)." OFF)
 option(OPENMS_THERMO_BRIDGE_DOWNLOAD_PREBUILT_MANAGED "Automatically download pre-built managed artifacts from GitHub Releases." OFF)
 
 if(NOT OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR AND NOT OPENMS_THERMO_BRIDGE_DOWNLOAD_PREBUILT_MANAGED)
@@ -174,11 +175,13 @@ if(NOT OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR)
             --self-contained false
             -o "${OPENMS_THERMO_BRIDGE_MANAGED_DIR}"
             --configfile "${OPENMS_THERMO_BRIDGE_NUGET_CONFIG}"
+            "-p:ThermoBridgeEnableS3=$<IF:$<BOOL:${OPENMS_THERMO_BRIDGE_ENABLE_S3}>,true,false>"
     DEPENDS openms_thermo_bridge_vendor_packages
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoWrapperManaged.csproj"
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoWrapperManaged.cs"
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoMetadata.cs"
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoScanReader.cs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/RemoteRawAccess.cs"
             "${CMAKE_CURRENT_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt"
             "${OPENMS_THERMO_BRIDGE_NUGET_CONFIG}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"

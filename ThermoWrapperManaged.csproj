@@ -16,6 +16,14 @@
     <PackageReference Include="ThermoFisher.CommonCore.RandomAccessReaderPlugin" Version="8.0.37" />
     <PackageReference Include="ThermoFisher.CommonCore.RawFileReader" Version="8.0.37" />
   </ItemGroup>
+  <!-- Experimental s3:// support through the official AWS SDK (signed requests, credential chain).
+       Off by default: without it s3:// URLs are read unsigned over HTTPS (public objects only). -->
+  <PropertyGroup Condition="'$(ThermoBridgeEnableS3)' == 'true'">
+    <DefineConstants>$(DefineConstants);THERMO_BRIDGE_S3</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(ThermoBridgeEnableS3)' == 'true'">
+    <PackageReference Include="AWSSDK.S3" Version="3.7.*" />
+  </ItemGroup>
   <ItemGroup>
     <!-- The licenses of the bridge, of the open-source assemblies the packages above bring along,
          and of nethost; published next to the assemblies. Update it when these packages change. -->

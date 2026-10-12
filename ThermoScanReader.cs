@@ -568,9 +568,11 @@ namespace ThermoWrapperManaged
         {
             try
             {
-                if (!FilePool.TryGet(handle, out var rf)) return Err.BadHandle;
-                using var stream = new FileStream(rf.FileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
-                    1 << 20, FileOptions.SequentialScan);
+                if (!FilePool.TryGetEntry(handle, out var entry)) return Err.BadHandle;
+                using Stream stream = entry.Shared.Remote != null
+                    ? new BufferedStream(entry.Shared.Remote.OpenSequentialStream(), 8 << 20)
+                    : new FileStream(entry.Raw.FileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
+                        1 << 20, FileOptions.SequentialScan);
                 var hex = Convert.ToHexString(SHA1.HashData(stream)).ToLowerInvariant();
                 return WriteString(hex, buffer, size);
             }

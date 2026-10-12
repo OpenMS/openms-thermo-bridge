@@ -1,6 +1,12 @@
 // Benchmark and parity dump for the Thermo bridge (local use, not run in CI).
 //
 //   thermo_bridge_bench <file.raw> [--threads N] [--batch B] [--dump out.jsonl]
+//                       [--mode all|scans|random] [--random N]
+//
+// <file.raw> may also be an http(s):// or s3:// URL (experimental range reader).
+// --mode scans times only open + one cold read_scans pass; --mode random times
+// open + N (default 100) read_scan calls on pseudo-random scan numbers (fixed
+// seed). Both are meant for measuring remote access cost in a fresh process.
 //
 // Prints wall time per scan for the legacy per-call path and the single-pass
 // read_scan / read_scans / thread_accessor paths, and checks that batched and
@@ -213,18 +219,23 @@ int main(int argc, char** argv)
 {
     if (argc < 2)
     {
-        std::cerr << "usage: thermo_bridge_bench file.raw [--threads N] [--batch B] [--dump out.jsonl]\n";
+        std::cerr << "usage: thermo_bridge_bench file.raw [--threads N] [--batch B] [--dump out.jsonl]"
+                     " [--mode all|scans|random] [--random N]\n";
         return 2;
     }
     unsigned threads = std::max(2u, std::min(8u, std::thread::hardware_concurrency()));
     int batch_size = 256;
     std::string dump_path;
+    std::string mode = "all";
+    int random_count = 100;
     for (int i = 2; i + 1 < argc; i += 2)
     {
         const std::string opt = argv[i];
         if (opt == "--threads") threads = static_cast<unsigned>(std::max(1, std::atoi(argv[i + 1])));
         else if (opt == "--batch") batch_size = std::max(1, std::atoi(argv[i + 1]));
         else if (opt == "--dump") dump_path = argv[i + 1];
+        else if (opt == "--mode") mode = argv[i + 1];
+        else if (opt == "--random") random_count = std::max(1, std::atoi(argv[i + 1]));
         else { std::cerr << "unknown option " << opt << "\n"; return 2; }
     }
 
@@ -237,6 +248,37 @@ int main(int argc, char** argv)
         const int last = raw.last_scan_number();
         const auto n = static_cast<std::size_t>(last - first + 1);
         std::cout << argv[1] << ": " << n << " scans, open " << secs(t_open0, t_open1) << " s\n";
+
+        if (mode == "scans")
+        {
+            ScanBatch batch;
+            std::size_t peaks = 0;
+            const auto t0 = Clock::now();
+            for (int s = first; s <= last; s += batch_size)
+            {
+                raw.read_scans(s, std::min(last, s + batch_size - 1), batch);
+                peaks += batch.mz.size();
+            }
+            std::printf("  cold read_scans batch=%d: %.3f s (%zu peaks)\n", batch_size, secs(t0, Clock::now()), peaks);
+            return 0;
+        }
+        if (mode == "random")
+        {
+            std::uint64_t state = 0x9E3779B97F4A7C15ull;
+            Spectrum spectrum;
+            std::size_t peaks = 0;
+            const auto t0 = Clock::now();
+            for (int i = 0; i < random_count; ++i)
+            {
+                state = state * 6364136223846793005ull + 1442695040888963407ull;
+                const int s = first + static_cast<int>((state >> 33) % n);
+                raw.read_scan(s, spectrum);
+                peaks += spectrum.mz.size();
+            }
+            std::printf("  cold random read_scan x%d: %.3f s (%zu peaks)\n", random_count, secs(t0, Clock::now()), peaks);
+            return 0;
+        }
+        if (mode != "all") { std::cerr << "unknown mode " << mode << "\n"; return 2; }
 
         // Warm up so the first timed loop is not penalised by JIT and vendor caches.
         for (int s = first; s <= std::min(last, first + 20); ++s) { raw.read_scan(s); raw.scan_metadata_json(s); }

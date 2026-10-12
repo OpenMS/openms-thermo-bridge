@@ -241,6 +241,28 @@ They are for comparison only.
 legacy JSON, SHA-1 and TIC. Both tools are for local use only and need RAW
 files that are not part of the repository. They are not run in CI.
 
+### Remote files (experimental)
+
+`RawFile` also accepts `http://`, `https://` and `s3://bucket/key` locations.
+These are read with HTTP `Range` requests through a block cache plugged into
+RawFileReader's delegated random-access interface. That interface is not
+documented by Thermo, so this feature may break with a vendor package update.
+
+- `http(s)://` works with any server that supports `Range`, including public
+  S3 objects and presigned URLs. It needs no extra dependency.
+- `s3://` works for public objects in the default build: requests are not signed
+  and go to `https://bucket.s3[.region].amazonaws.com/key`, or to
+  `AWS_ENDPOINT_URL` if it is set. Configure with
+  `-DOPENMS_THERMO_BRIDGE_ENABLE_S3=ON` to use AWSSDK.S3 instead. You then get
+  the standard credential chain, plus `AWS_REGION` and `AWS_ENDPOINT_URL` for
+  MinIO and similar services. This adds about 3.5 MB of managed DLLs.
+- Tuning and diagnostic environment variables (`THERMO_BRIDGE_REMOTE_BLOCK_KB`,
+  `_CACHE_MB`, `_READAHEAD_KB`, `_PARALLEL`, `_STATS`, ...) are documented at the top
+  of `RemoteRawAccess.cs`. `THERMO_BRIDGE_FORCE_RANGE_READER=1` routes local
+  files through the same code path for testing.
+- `tools/range_http_server.py` is a small Range-capable test server with optional
+  added latency and request counters.
+
 ## Migrating from 0.3.x
 
 | 0.3.x | 1.0 |
