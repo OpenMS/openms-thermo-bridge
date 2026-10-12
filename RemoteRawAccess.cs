@@ -12,9 +12,13 @@
 // fixed 1 MB / multi-MB batches, which over-fetch badly on random access.
 //
 // Environment (all optional):
-//   THERMO_BRIDGE_REMOTE_BLOCK_KB     cache block size in KiB (default 512); smaller blocks
-//                                     transfer fewer bytes on random access, larger ones
-//                                     need fewer requests
+//   THERMO_BRIDGE_REMOTE_BLOCK_KB     cache block size in KiB (default 64): the fetch unit for
+//                                     isolated random misses
+//   THERMO_BRIDGE_REMOTE_REGION_KB    region size in KiB (default 2048; 0 disables): after
+//   THERMO_BRIDGE_REMOTE_REGION_MISSES  this many (default 4) non-sequential misses in a region,
+//                                     the next one fetches all its missing blocks at once, so
+//                                     dense regions need few requests while sparse random access
+//                                     transfers little
 //   THERMO_BRIDGE_REMOTE_CACHE_MB     cache capacity in MiB per file (default 256)
 //   THERMO_BRIDGE_REMOTE_READAHEAD_KB max readahead window in KiB for sequential streams (default 8192)
 //   THERMO_BRIDGE_REMOTE_PARALLEL     max concurrent range requests per multi-block fetch (default 4)
@@ -328,8 +332,13 @@ namespace ThermoWrapperManaged.Remote
 
         private readonly int _parallel;
 
-        public BlockCache(RangeSource source, int blockSize, long capacityBytes, int readahead, int parallel)
+        private readonly int _regionBlocks, _regionThreshold;
+        private readonly Dictionary<long, int> _regionMisses = new();
+
+        public BlockCache(RangeSource source, int blockSize, long capacityBytes, int readahead, int parallel, int regionBlocks = 1, int regionThreshold = 2)
         {
+            _regionThreshold = Math.Max(1, regionThreshold);
+            _regionBlocks = Math.Max(1, regionBlocks);
             _parallel = Math.Max(1, parallel);
             _source = source;
             _blockSize = Math.Max(4096, blockSize);
@@ -418,6 +427,28 @@ namespace ThermoWrapperManaged.Remote
                     for (int i = 1; i < _streamNext.Length; i++)
                         if (_streamUse[i] < _streamUse[stream]) stream = i;
                     _streamWindow[stream] = 0;
+                    // Region promotion: an isolated miss fetches only its block; a repeated miss in
+                    // the same region fetches the region's contiguous missing blocks around it.
+                    if (_regionBlocks > 1)
+                    {
+                        long region = b / _regionBlocks;
+                        _regionMisses.TryGetValue(region, out int seen);
+                        _regionMisses[region] = seen + 1;
+                        if (seen + 1 >= _regionThreshold)
+                        {
+                            long lo = region * _regionBlocks, hi = Math.Min(lastBlock, lo + _regionBlocks - 1);
+                            for (; next <= hi && !_blocks.ContainsKey(next); next++)
+                            {
+                                run.Add(AddBlock(next));
+                                Interlocked.Increment(ref _misses);
+                            }
+                            while (runStart - 1 >= lo && !_blocks.ContainsKey(runStart - 1))
+                            {
+                                run.Insert(0, AddBlock(--runStart));
+                                Interlocked.Increment(ref _misses);
+                            }
+                        }
+                    }
                 }
                 else if (next > last && _readahead > 0)
                 {
@@ -516,11 +547,15 @@ namespace ThermoWrapperManaged.Remote
         {
             Name = name;
             Source = source;
-            int blockKb = EnvInt("THERMO_BRIDGE_REMOTE_BLOCK_KB", 512);
+            int blockKb = EnvInt("THERMO_BRIDGE_REMOTE_BLOCK_KB", 64);
+            var regionEnv = Environment.GetEnvironmentVariable("THERMO_BRIDGE_REMOTE_REGION_KB");
+            int regionKb = int.TryParse(regionEnv, out var r) && r >= 0 ? r : 2048;
+            int regionBlocks = Math.Max(1, regionKb / Math.Max(1, blockKb));
+            int regionMisses = EnvInt("THERMO_BRIDGE_REMOTE_REGION_MISSES", 4);
             long cacheMb = EnvInt("THERMO_BRIDGE_REMOTE_CACHE_MB", 256);
             int readahead = (int)Math.Max(0, EnvInt("THERMO_BRIDGE_REMOTE_READAHEAD_KB", 8192) / Math.Max(1, blockKb));
             int parallel = EnvInt("THERMO_BRIDGE_REMOTE_PARALLEL", 4);
-            Cache = new BlockCache(source, blockKb * 1024, cacheMb * 1024 * 1024, readahead, parallel);
+            Cache = new BlockCache(source, blockKb * 1024, cacheMb * 1024 * 1024, readahead, parallel, regionBlocks, regionMisses);
             ChunkSize = int.TryParse(Environment.GetEnvironmentVariable("THERMO_BRIDGE_REMOTE_CHUNK_KB"), out var chunkKb)
                 ? (chunkKb < 0 ? -1 : chunkKb * 1024) : -1;
         }
