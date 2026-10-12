@@ -1,6 +1,10 @@
 #include <openms_thermo_bridge/thermo_bridge.hpp>
 
+#include <algorithm>
 #include <array>
+#include <stdexcept>
+#include <limits>
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -8,7 +12,6 @@
 #include <iostream>
 #include <mutex>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -54,8 +57,6 @@ using fn_int_from_int_int     = int(*)(int, int);                     // H_GetMS
 using fn_double_from_int_int  = double(*)(int, int);                  // H_GetRetentionTime(handle, scan)
 using fn_str_from_int         = int(*)(int, void*, int);              // H_GetInstrumentModel(handle, buf, size)
 using fn_str_from_int_int     = int(*)(int, int, void*, int);         // H_GetScanFilter(handle, scan, buf, size)
-using fn_spectrum_count       = int(*)(int, int, int);                // H_GetSpectrumPeakCount(handle, scan, centroid)
-using fn_spectrum_data        = int(*)(int, int, int, void*, void*, int); // H_GetSpectrumData(handle, scan, centroid, mzBuf, intBuf, sz)
 using fn_chrom_len            = int(*)(int);                          // H_GetChromatogramLength(handle)
 using fn_chrom_data           = int(*)(int, void*, void*, int);       // H_GetChromatogramData(handle, rtBuf, intBuf, sz)
 using fn_xic_len              = int(*)(int, double, double, double, double); // H_GetXicLength(handle, mzS, mzE, rtS, rtE)
@@ -63,6 +64,15 @@ using fn_xic_data             = int(*)(int, double, double, double, double, void
 using fn_trailer_labels       = int(*)(int, int, void*, int);         // H_GetTrailerExtraLabels(handle, scan, buf, sz)
 using fn_trailer_value        = int(*)(int, int, void*, void*, int);  // H_GetTrailerExtraValue(handle, scan, key, buf, sz)
 using fn_method               = int(*)(int, int, void*, int);         // H_GetInstrumentMethod(handle, idx, buf, sz)
+using fn_aux_array            = int(*)(int, int, int, void*, int);    // H_GetSpectrumAuxiliaryArray(handle, scan, kind, buf, sz)
+using fn_select_instrument    = int(*)(int, int, int);                // H_SelectInstrument(handle, type, number)
+using fn_set_selection        = int(*)(int, const void*, int);        // H_SetTrailerSelection(handle, packed, sz)
+
+// Native allocator handed to managed code: returns a buffer for `count` elements of
+// the buffer `kind`, or null on failure. Must not throw or call back into managed code.
+using fn_alloc                = void*(*)(void*, std::int32_t, std::int64_t);
+using fn_read_scans           = int(*)(int, int, int, int, fn_alloc, void*); // H_ReadScans(handle, first, last, flags, alloc, ctx)
+using fn_trailer_layout       = int(*)(int, fn_alloc, void*);         // H_GetTrailerLayout(handle, alloc, ctx)
 
 namespace openms::thermo_bridge
 {
@@ -282,6 +292,72 @@ std::basic_string<char_t> to_char_t_path(const std::filesystem::path& path)
 #endif
 }
 
+// Every managed entry point, resolved once when the runtime starts.
+#define OPENMS_THERMO_BRIDGE_ENTRY_POINTS(X) \
+    X(GetScanCount, fn_int_from_ptr) \
+    X(OpenRawFile, fn_int_from_ptr) \
+    X(CloseRawFile, fn_int_from_int) \
+    X(H_CreateThreadAccessor, fn_int_from_int) \
+    X(H_GetFirstScanNumber, fn_int_from_int) \
+    X(H_GetLastScanNumber, fn_int_from_int) \
+    X(H_GetScanCount, fn_int_from_int) \
+    X(H_GetFileRevision, fn_int_from_int) \
+    X(H_GetInstrumentMethodCount, fn_int_from_int) \
+    X(H_GetMSInstrumentCount, fn_int_from_int) \
+    X(H_HasMSData, fn_int_from_int) \
+    X(H_GetStartTime, fn_double_from_int) \
+    X(H_GetEndTime, fn_double_from_int) \
+    X(H_GetLowMass, fn_double_from_int) \
+    X(H_GetHighMass, fn_double_from_int) \
+    X(H_GetBasePeakIntensity, fn_double_from_int_int) \
+    X(H_GetBasePeakMass, fn_double_from_int_int) \
+    X(H_GetCollisionEnergy, fn_double_from_int_int) \
+    X(H_GetIsolationWidth, fn_double_from_int_int) \
+    X(H_GetPrecursorMass, fn_double_from_int_int) \
+    X(H_GetRetentionTime, fn_double_from_int_int) \
+    X(H_GetTIC, fn_double_from_int_int) \
+    X(H_GetInstrumentCount, fn_int_from_int_int) \
+    X(H_GetMSLevel, fn_int_from_int_int) \
+    X(H_GetPolarity, fn_int_from_int_int) \
+    X(H_GetPrecursorCharge, fn_int_from_int_int) \
+    X(H_GetTrailerExtraCount, fn_int_from_int_int) \
+    X(H_IsCentroidScan, fn_int_from_int_int) \
+    X(H_GetCreationDate, fn_str_from_int) \
+    X(H_GetDetectorChromatograms, fn_str_from_int) \
+    X(H_GetFileDescription, fn_str_from_int) \
+    X(H_GetInstrumentModel, fn_str_from_int) \
+    X(H_GetInstrumentName, fn_str_from_int) \
+    X(H_GetInstrumentSerialNumber, fn_str_from_int) \
+    X(H_GetInstrumentSoftwareVersion, fn_str_from_int) \
+    X(H_GetSampleName, fn_str_from_int) \
+    X(H_GetFileSha1, fn_str_from_int) \
+    X(H_GetActivationType, fn_str_from_int_int) \
+    X(H_GetFileMetadata, fn_str_from_int_int) \
+    X(H_GetIonizationMode, fn_str_from_int_int) \
+    X(H_GetMassAnalyzerType, fn_str_from_int_int) \
+    X(H_GetScanFilter, fn_str_from_int_int) \
+    X(H_GetScanMetadata, fn_str_from_int_int) \
+    X(H_GetInstrumentMethod, fn_method) \
+    X(H_GetChromatogramLength, fn_chrom_len) \
+    X(H_GetChromatogramData, fn_chrom_data) \
+    X(H_GetXicLength, fn_xic_len) \
+    X(H_GetXicData, fn_xic_data) \
+    X(H_GetTrailerExtraLabels, fn_trailer_labels) \
+    X(H_GetTrailerExtraValue, fn_trailer_value) \
+    X(H_GetSpectrumAuxiliaryArray, fn_aux_array) \
+    X(H_SelectInstrument, fn_select_instrument) \
+    X(H_ReadScans, fn_read_scans) \
+    X(H_GetTrailerLayout, fn_trailer_layout) \
+    X(H_SetTrailerSelection, fn_set_selection)
+
+/// Immutable after Runtime initialisation; read without locking.
+struct ManagedApi
+{
+#define OPENMS_THERMO_BRIDGE_DECLARE_ENTRY(name, type) type name = nullptr;
+    OPENMS_THERMO_BRIDGE_ENTRY_POINTS(OPENMS_THERMO_BRIDGE_DECLARE_ENTRY)
+#undef OPENMS_THERMO_BRIDGE_DECLARE_ENTRY
+};
+
 // ================================================================
 //  CLR Runtime singleton – initialises once, caches delegates
 // ================================================================
@@ -295,10 +371,13 @@ public:
     }
 
     /// Ensure the runtime is initialised for the given managed_directory.
+    /// The first successful call loads the CLR and resolves all entry points;
+    /// later calls only take the lock-free fast path.
     void ensure_init(const std::filesystem::path& managed_directory)
     {
+        if (initialised_.load(std::memory_order_acquire)) return;
         std::lock_guard<std::mutex> lock(mutex_);
-        if (initialised_) return;
+        if (initialised_.load(std::memory_order_relaxed)) return;
 
         managed_directory_ = managed_directory;
         runtime_config_ = managed_directory / "ThermoWrapperManaged.runtimeconfig.json";
@@ -351,22 +430,23 @@ public:
         if (rc != 0 || load_assembly_ == nullptr)
             throw bridge_error("hostfxr_get_runtime_delegate failed with code " + std::to_string(rc));
 
-        initialised_ = true;
+        ManagedApi table;
+#define OPENMS_THERMO_BRIDGE_RESOLVE_ENTRY(name, type) table.name = reinterpret_cast<type>(resolve(#name));
+        OPENMS_THERMO_BRIDGE_ENTRY_POINTS(OPENMS_THERMO_BRIDGE_RESOLVE_ENTRY)
+#undef OPENMS_THERMO_BRIDGE_RESOLVE_ENTRY
+        api_ = table;
+        initialised_.store(true, std::memory_order_release);
     }
 
-    /// Resolve a C# entry-point and return its function pointer (cached).
-    template <typename FnType>
-    FnType resolve(const char* entry_point_name)
+    /// Entry-point table. Only valid after ensure_init(); RawFile objects exist only then.
+    const ManagedApi& api() const noexcept { return api_; }
+
+private:
+    /// Resolve one [UnmanagedCallersOnly] entry point (init only, mutex held).
+    void* resolve(const char* entry_point_name)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!initialised_) throw bridge_error("Runtime not initialised");
-
-        auto it = fn_cache_.find(entry_point_name);
-        if (it != fn_cache_.end()) return reinterpret_cast<FnType>(it->second);
-
         const auto assembly_path_native = to_char_t_path(assembly_path_);
 
-        // Convert entry_point_name to char_t string at runtime.
         // Entry point names are C# method identifiers, guaranteed ASCII.
 #if defined(_WIN32)
         std::wstring entry_wide;
@@ -386,23 +466,23 @@ public:
             nullptr,
             &fn);
         if (rc != 0 || fn == nullptr)
-            throw bridge_error(std::string("Failed to resolve managed entry point '") + entry_point_name + "' (code " + std::to_string(rc) + ")");
-
-        fn_cache_[entry_point_name] = fn;
-        return reinterpret_cast<FnType>(fn);
+            throw bridge_error(std::string("Failed to resolve managed entry point '") + entry_point_name
+                + "' (code " + std::to_string(rc) + "); native and managed bridge versions must match");
+        return fn;
     }
 
-private:
     Runtime() = default;
 
     std::mutex mutex_;
-    bool initialised_ = false;
+    std::atomic<bool> initialised_{false};
+    ManagedApi api_;
     std::filesystem::path managed_directory_;
     std::filesystem::path runtime_config_;
     std::filesystem::path assembly_path_;
     load_assembly_and_get_function_pointer_fn load_assembly_ = nullptr;
-    std::unordered_map<std::string, void*> fn_cache_;
 };
+
+const ManagedApi& api() noexcept { return Runtime::instance().api(); }
 
 // ================================================================
 //  Internal helpers
@@ -445,7 +525,7 @@ std::vector<char> make_utf8(const std::string& s)
 template <typename FnType, typename... ExtraArgs>
 std::string call_string_fn(FnType fn, int handle, ExtraArgs... extra)
 {
-    // First call: discover size needed.
+    // First call: discover size needed (metadata JSON is cached managed-side).
     int needed = fn(handle, extra..., nullptr, 0);
     check_int_result(needed, "string query");
     if (needed == 0) return {};
@@ -456,11 +536,372 @@ std::string call_string_fn(FnType fn, int handle, ExtraArgs... extra)
     return std::string(buf.data(), static_cast<std::size_t>(written));
 }
 
+// ================================================================
+//  Single-pass scan transfer (see ThermoScanReader.cs)
+// ================================================================
+
+// Mirrors of the managed [StructLayout(Sequential)] records.
+struct NativeScanHeader
+{
+    std::int32_t scan_number;
+    std::int32_t controller_type;
+    std::int32_t controller_number;
+    std::int32_t ms_order;
+    std::int32_t polarity;
+    std::int32_t analyzer;
+    std::int32_t ionization;
+    std::int32_t centroid;
+    std::int32_t peak_source;
+    std::int32_t reserved;
+    double retention_time;
+    double tic;
+    double base_peak_mass;
+    double base_peak_intensity;
+    double low_mass;
+    double high_mass;
+    double low_wavelength;
+    double high_wavelength;
+};
+static_assert(sizeof(NativeScanHeader) == 104, "NativeScanHeader layout must match ThermoScanReader.cs");
+
+struct NativeReaction
+{
+    double precursor_mass;
+    double isolation_width;
+    double isolation_offset;
+    double collision_energy;
+    double first_precursor_mass;
+    double last_precursor_mass;
+    std::int32_t activation;
+    std::int32_t flags;
+};
+static_assert(sizeof(NativeReaction) == 56, "NativeReaction layout must match ThermoScanReader.cs");
+
+struct NativeTrailerLabel
+{
+    std::int32_t kind;
+    std::int32_t slot;
+    std::int32_t vendor_type;
+    std::int32_t selected;
+};
+static_assert(sizeof(NativeTrailerLabel) == 16, "NativeTrailerLabel layout must match ThermoScanReader.cs");
+
+enum SinkKind : std::int32_t
+{
+    kHeader = 0, kFilter = 1, kReactions = 2, kMz = 3, kIntensities = 4, kCharges = 5,
+    kNoiseMz = 6, kNoiseIntensities = 7, kNoiseBaselines = 8,
+    kTrailerDoubles = 9, kTrailerInts = 10, kTrailerBools = 11, kTrailerStrings = 12, kTrailerText = 13,
+    kLayoutLabels = 20, kLayoutNames = 21
+};
+
+int read_flags(const ReadOptions& o)
+{
+    return (o.centroid ? 1 : 0) | (o.peaks ? 2 : 0) | (o.trailers ? 4 : 0) | (o.trailer_text ? 8 : 0)
+        | (o.charges ? 16 : 0) | (o.noise ? 32 : 0);
+}
+
+/// Splits NUL-terminated packed UTF-8 values, reusing existing string capacity.
+void unpack_strings(const std::string& packed, std::vector<std::string>& out)
+{
+    std::size_t count = 0;
+    std::size_t start = 0;
+    while (start < packed.size())
+    {
+        std::size_t end = packed.find('\0', start);
+        if (end == std::string::npos) end = packed.size();
+        if (count == out.size()) out.emplace_back();
+        out[count++].assign(packed, start, end - start);
+        start = end + 1;
+    }
+    out.resize(count);
+}
+
+/// Per-scan state collected while managed code writes one scan.
+struct ScanStage
+{
+    NativeScanHeader fixed{};
+    std::vector<NativeReaction> reactions;
+    std::string trailer_strings;
+    std::string trailer_text;
+    bool active = false;
+
+    void begin()
+    {
+        fixed = NativeScanHeader{};
+        reactions.clear();
+        trailer_strings.clear();
+        trailer_text.clear();
+        active = true;
+    }
+
+    void finish(ScanHeader& h)
+    {
+        h.scan_number = fixed.scan_number;
+        h.controller_type = fixed.controller_type;
+        h.controller_number = fixed.controller_number;
+        h.ms_order = static_cast<MsOrder>(fixed.ms_order);
+        h.polarity = static_cast<Polarity>(fixed.polarity);
+        h.analyzer = fixed.analyzer;
+        h.ionization = fixed.ionization;
+        h.centroid = fixed.centroid != 0;
+        h.peak_source = static_cast<PeakSource>(fixed.peak_source);
+        h.retention_time = fixed.retention_time;
+        h.tic = fixed.tic;
+        h.base_peak_mass = fixed.base_peak_mass;
+        h.base_peak_intensity = fixed.base_peak_intensity;
+        h.low_mass = fixed.low_mass;
+        h.high_mass = fixed.high_mass;
+        h.low_wavelength = fixed.low_wavelength;
+        h.high_wavelength = fixed.high_wavelength;
+        h.reactions.resize(reactions.size());
+        for (std::size_t i = 0; i < reactions.size(); ++i)
+        {
+            const auto& n = reactions[i];
+            auto& r = h.reactions[i];
+            r.precursor_mass = n.precursor_mass;
+            r.isolation_width = n.isolation_width;
+            r.isolation_offset = n.isolation_offset;
+            r.collision_energy = n.collision_energy;
+            r.first_precursor_mass = n.first_precursor_mass;
+            r.last_precursor_mass = n.last_precursor_mass;
+            r.activation = n.activation;
+            r.collision_energy_valid = (n.flags & 1) != 0;
+            r.precursor_range_valid = (n.flags & 2) != 0;
+            r.multiple_activation = (n.flags & 4) != 0;
+        }
+        unpack_strings(trailer_strings, h.trailer_strings);
+        unpack_strings(trailer_text, h.trailer_text);
+        active = false;
+    }
+};
+
+template <typename T>
+void* grow(std::vector<T>& v, std::int64_t count)
+{
+    const std::size_t old = v.size();
+    v.resize(old + static_cast<std::size_t>(count));
+    return v.data() + old;
+}
+
+void clear_header(ScanHeader& h)
+{
+    h.filter.clear();
+    h.trailer_doubles.clear();
+    h.trailer_ints.clear();
+    h.trailer_bools.clear();
+}
+
+/// Writes one scan into a reusable Spectrum.
+struct SpectrumSink
+{
+    Spectrum& out;
+    ScanStage stage;
+
+    void* alloc(std::int32_t kind, std::int64_t count)
+    {
+        auto& h = out.header;
+        switch (kind)
+        {
+        case kHeader:
+            stage.begin();
+            clear_header(h);
+            out.mz.clear(); out.intensities.clear(); out.charges.clear();
+            out.noise_mz.clear(); out.noise_intensities.clear(); out.noise_baselines.clear();
+            return &stage.fixed;
+        case kFilter: h.filter.resize(static_cast<std::size_t>(count)); return h.filter.data();
+        case kReactions: return grow(stage.reactions, count);
+        case kMz: return grow(out.mz, count);
+        case kIntensities: return grow(out.intensities, count);
+        case kCharges: return grow(out.charges, count);
+        case kNoiseMz: return grow(out.noise_mz, count);
+        case kNoiseIntensities: return grow(out.noise_intensities, count);
+        case kNoiseBaselines: return grow(out.noise_baselines, count);
+        case kTrailerDoubles: return grow(h.trailer_doubles, count);
+        case kTrailerInts: return grow(h.trailer_ints, count);
+        case kTrailerBools: return grow(h.trailer_bools, count);
+        case kTrailerStrings: stage.trailer_strings.resize(static_cast<std::size_t>(count)); return stage.trailer_strings.data();
+        case kTrailerText: stage.trailer_text.resize(static_cast<std::size_t>(count)); return stage.trailer_text.data();
+        default: return nullptr;
+        }
+    }
+
+    void finish()
+    {
+        if (stage.active) stage.finish(out.header);
+    }
+};
+
+/// Appends scans to a packed ScanBatch.
+struct BatchSink
+{
+    ScanBatch& out;
+    ScanStage stage;
+
+    void close_scan()
+    {
+        if (stage.active) stage.finish(out.headers.back());
+    }
+
+    void* alloc(std::int32_t kind, std::int64_t count)
+    {
+        switch (kind)
+        {
+        case kHeader:
+            close_scan();
+            out.headers.emplace_back();
+            out.peak_offsets.push_back(out.mz.size());
+            out.charge_offsets.push_back(out.charges.size());
+            out.noise_offsets.push_back(out.noise_mz.size());
+            stage.begin();
+            return &stage.fixed;
+        case kFilter:
+        {
+            auto& f = out.headers.back().filter;
+            f.resize(static_cast<std::size_t>(count));
+            return f.data();
+        }
+        case kReactions: return grow(stage.reactions, count);
+        case kMz: return grow(out.mz, count);
+        case kIntensities: return grow(out.intensities, count);
+        case kCharges: return grow(out.charges, count);
+        case kNoiseMz: return grow(out.noise_mz, count);
+        case kNoiseIntensities: return grow(out.noise_intensities, count);
+        case kNoiseBaselines: return grow(out.noise_baselines, count);
+        case kTrailerDoubles: return grow(out.headers.back().trailer_doubles, count);
+        case kTrailerInts: return grow(out.headers.back().trailer_ints, count);
+        case kTrailerBools: return grow(out.headers.back().trailer_bools, count);
+        case kTrailerStrings: stage.trailer_strings.resize(static_cast<std::size_t>(count)); return stage.trailer_strings.data();
+        case kTrailerText: stage.trailer_text.resize(static_cast<std::size_t>(count)); return stage.trailer_text.data();
+        default: return nullptr;
+        }
+    }
+
+    void finish()
+    {
+        close_scan();
+        out.peak_offsets.push_back(out.mz.size());
+        out.charge_offsets.push_back(out.charges.size());
+        out.noise_offsets.push_back(out.noise_mz.size());
+    }
+};
+
+struct LayoutSink
+{
+    std::vector<NativeTrailerLabel> labels;
+    std::string names;
+
+    void* alloc(std::int32_t kind, std::int64_t count)
+    {
+        if (kind == kLayoutLabels) return grow(labels, count);
+        if (kind == kLayoutNames) { names.resize(static_cast<std::size_t>(count)); return names.data(); }
+        return nullptr;
+    }
+};
+
+/// The C callback handed to managed code. Never throws (null signals failure).
+template <typename Sink>
+void* sink_alloc(void* ctx, std::int32_t kind, std::int64_t count) noexcept
+{
+    if (count < 0) return nullptr;
+    try { return static_cast<Sink*>(ctx)->alloc(kind, count); }
+    catch (...) { return nullptr; }
+}
+
+void check_read_result(int result, const char* context)
+{
+    if (result == -6) throw bridge_error(std::string(context) + ": out of memory");
+    check_int_result(result, context);
+}
+
+const char* const kMsOrderNames[] = {"Ng", "Nl", "Par", "Any", "Ms", "Ms2", "Ms3", "Ms4", "Ms5", "Ms6", "Ms7", "Ms8", "Ms9", "Ms10"};
+const char* const kAnalyzerNames[] = {"MassAnalyzerITMS", "MassAnalyzerTQMS", "MassAnalyzerSQMS", "MassAnalyzerTOFMS",
+    "MassAnalyzerFTMS", "MassAnalyzerSector", "Any", "MassAnalyzerASTMS"};
+const char* const kIonizationNames[] = {"ElectronImpact", "ChemicalIonization", "FastAtomBombardment", "ElectroSpray",
+    "AtmosphericPressureChemicalIonization", "NanoSpray", "ThermoSpray", "FieldDesorption",
+    "MatrixAssistedLaserDesorptionIonization", "GlowDischarge", "Any", "PaperSprayIonization", "CardNanoSprayIonization",
+    "IonizationMode1", "IonizationMode2", "IonizationMode3", "IonizationMode4", "IonizationMode5", "IonizationMode6",
+    "IonizationMode7", "IonizationMode8", "IonizationMode9", "IonModeBeyondKnown"};
+const char* const kActivationNames[] = {"CollisionInducedDissociation", "MultiPhotonDissociation", "ElectronCaptureDissociation",
+    "PQD", "ElectronTransferDissociation", "HigherEnergyCollisionalDissociation", "Any", "SAactivation",
+    "ProtonTransferReaction", "NegativeElectronTransferDissociation", "NegativeProtonTransferReaction",
+    "UltraVioletPhotoDissociation", "ElectronInducedDissociation", "ElectronEnergy", "Infrared", "ModeD", "ModeE", "ModeF",
+    "ModeG", "ModeH", "ModeI", "ModeJ", "ModeK", "ModeL", "ModeM", "ModeN", "ModeO", "ModeP", "ModeQ", "ModeR", "ModeS",
+    "ModeT", "ModeU", "ModeV", "ModeW", "ModeX", "ModeY", "ModeZ", "LastActivation"};
+
+template <std::size_t N>
+std::string enum_name(const char* const (&names)[N], int value, int offset = 0)
+{
+    const int index = value + offset;
+    if (index >= 0 && index < static_cast<int>(N)) return names[index];
+    return std::to_string(value);
+}
+
 } // anonymous namespace
 
 // ================================================================
-//  Legacy free-functions
+//  Free functions
 // ================================================================
+
+std::string ms_order_name(MsOrder order) { return enum_name(kMsOrderNames, static_cast<int>(order), 3); }
+std::string mass_analyzer_name(int analyzer) { return enum_name(kAnalyzerNames, analyzer); }
+std::string ionization_mode_name(int ionization) { return enum_name(kIonizationNames, ionization); }
+std::string activation_type_name(int activation) { return enum_name(kActivationNames, activation); }
+
+namespace
+{
+template <typename T>
+const T& trailer_slot(const TrailerLayout& layout, int label_index, TrailerKind kind, const std::vector<T>& values)
+{
+    if (label_index < 0 || static_cast<std::size_t>(label_index) >= layout.labels.size())
+        throw std::out_of_range("trailer label index out of range");
+    const auto& label = layout.labels[static_cast<std::size_t>(label_index)];
+    if (label.kind != kind) throw std::out_of_range("trailer '" + label.label + "' has a different kind");
+    if (label.slot < 0 || static_cast<std::size_t>(label.slot) >= values.size())
+        throw std::out_of_range("trailer '" + label.label + "' was not read");
+    return values[static_cast<std::size_t>(label.slot)];
+}
+} // namespace
+
+double ScanHeader::trailer_double(const TrailerLayout& layout, int label_index) const
+{
+    return trailer_slot(layout, label_index, TrailerKind::Double, trailer_doubles);
+}
+
+std::int64_t ScanHeader::trailer_int(const TrailerLayout& layout, int label_index) const
+{
+    return trailer_slot(layout, label_index, TrailerKind::Int, trailer_ints);
+}
+
+bool ScanHeader::trailer_bool(const TrailerLayout& layout, int label_index) const
+{
+    return trailer_slot(layout, label_index, TrailerKind::Bool, trailer_bools) != 0;
+}
+
+const std::string& ScanHeader::trailer_string(const TrailerLayout& layout, int label_index) const
+{
+    return trailer_slot(layout, label_index, TrailerKind::String, trailer_strings);
+}
+
+double ScanHeader::trailer_as_double(const TrailerLayout& layout, int label_index) const
+{
+    if (label_index < 0 || static_cast<std::size_t>(label_index) >= layout.labels.size())
+        throw std::out_of_range("trailer label index out of range");
+    switch (layout.labels[static_cast<std::size_t>(label_index)].kind)
+    {
+    case TrailerKind::Double: return trailer_double(layout, label_index);
+    case TrailerKind::Int: return static_cast<double>(trailer_int(layout, label_index));
+    case TrailerKind::Bool: return trailer_bool(layout, label_index) ? 1.0 : 0.0;
+    default:
+    {
+        const std::string& text = trailer_string(layout, label_index);
+        const char* begin = text.c_str();
+        char* end = nullptr;
+        const double value = std::strtod(begin, &end);
+        if (end == begin) return std::numeric_limits<double>::quiet_NaN();
+        return value;
+    }
+    }
+}
 
 std::filesystem::path default_managed_directory()
 {
@@ -504,7 +945,7 @@ int get_scan_count(const std::filesystem::path& raw_file_path, const std::filesy
     auto& rt = Runtime::instance();
     rt.ensure_init(managed_directory);
 
-    auto fn = rt.resolve<fn_int_from_ptr>("GetScanCount");
+    auto fn = rt.api().GetScanCount;
     auto utf8 = make_utf8(raw_file_path);
     int result = fn(utf8.data());
 
@@ -529,7 +970,7 @@ RawFile::RawFile(const std::filesystem::path& raw_file_path,
     auto& rt = Runtime::instance();
     rt.ensure_init(managed_directory);
 
-    auto fn = rt.resolve<fn_int_from_ptr>("OpenRawFile");
+    auto fn = rt.api().OpenRawFile;
     auto utf8 = make_utf8(raw_file_path);
     handle_ = fn(utf8.data());
 
@@ -544,7 +985,7 @@ RawFile::~RawFile()
     {
         try
         {
-            auto fn = Runtime::instance().resolve<fn_int_from_int>("CloseRawFile");
+            auto fn = api().CloseRawFile;
             fn(handle_);
         }
         catch (...) {}
@@ -552,9 +993,15 @@ RawFile::~RawFile()
     }
 }
 
-RawFile::RawFile(RawFile&& other) noexcept : handle_(other.handle_)
+RawFile::RawFile(int handle) noexcept : handle_(handle)
+{
+}
+
+RawFile::RawFile(RawFile&& other) noexcept
+    : handle_(other.handle_), layout_(std::move(other.layout_)), layout_loaded_(other.layout_loaded_)
 {
     other.handle_ = 0;
+    other.layout_loaded_ = false;
 }
 
 RawFile& RawFile::operator=(RawFile&& other) noexcept
@@ -565,13 +1012,16 @@ RawFile& RawFile::operator=(RawFile&& other) noexcept
         {
             try
             {
-                auto fn = Runtime::instance().resolve<fn_int_from_int>("CloseRawFile");
+                auto fn = api().CloseRawFile;
                 fn(handle_);
             }
             catch (...) {}
         }
         handle_ = other.handle_;
+        layout_ = std::move(other.layout_);
+        layout_loaded_ = other.layout_loaded_;
         other.handle_ = 0;
+        other.layout_loaded_ = false;
     }
     return *this;
 }
@@ -580,7 +1030,7 @@ RawFile& RawFile::operator=(RawFile&& other) noexcept
 
 int RawFile::scan_count() const
 {
-    auto fn = Runtime::instance().resolve<fn_int_from_int>("H_GetScanCount");
+    auto fn = api().H_GetScanCount;
     int r = fn(handle_);
     check_int_result(r, "scan_count");
     return r;
@@ -588,7 +1038,7 @@ int RawFile::scan_count() const
 
 int RawFile::first_scan_number() const
 {
-    auto fn = Runtime::instance().resolve<fn_int_from_int>("H_GetFirstScanNumber");
+    auto fn = api().H_GetFirstScanNumber;
     int r = fn(handle_);
     check_int_result(r, "first_scan_number");
     return r;
@@ -596,7 +1046,7 @@ int RawFile::first_scan_number() const
 
 int RawFile::last_scan_number() const
 {
-    auto fn = Runtime::instance().resolve<fn_int_from_int>("H_GetLastScanNumber");
+    auto fn = api().H_GetLastScanNumber;
     int r = fn(handle_);
     check_int_result(r, "last_scan_number");
     return r;
@@ -604,7 +1054,7 @@ int RawFile::last_scan_number() const
 
 double RawFile::start_time() const
 {
-    auto fn = Runtime::instance().resolve<fn_double_from_int>("H_GetStartTime");
+    auto fn = api().H_GetStartTime;
     double r = fn(handle_);
     check_double_result(r, "start_time");
     return r;
@@ -612,7 +1062,7 @@ double RawFile::start_time() const
 
 double RawFile::end_time() const
 {
-    auto fn = Runtime::instance().resolve<fn_double_from_int>("H_GetEndTime");
+    auto fn = api().H_GetEndTime;
     double r = fn(handle_);
     check_double_result(r, "end_time");
     return r;
@@ -620,7 +1070,7 @@ double RawFile::end_time() const
 
 double RawFile::low_mass() const
 {
-    auto fn = Runtime::instance().resolve<fn_double_from_int>("H_GetLowMass");
+    auto fn = api().H_GetLowMass;
     double r = fn(handle_);
     check_double_result(r, "low_mass");
     return r;
@@ -628,7 +1078,7 @@ double RawFile::low_mass() const
 
 double RawFile::high_mass() const
 {
-    auto fn = Runtime::instance().resolve<fn_double_from_int>("H_GetHighMass");
+    auto fn = api().H_GetHighMass;
     double r = fn(handle_);
     check_double_result(r, "high_mass");
     return r;
@@ -636,7 +1086,7 @@ double RawFile::high_mass() const
 
 bool RawFile::has_ms_data() const
 {
-    auto fn = Runtime::instance().resolve<fn_int_from_int>("H_HasMSData");
+    auto fn = api().H_HasMSData;
     int r = fn(handle_);
     check_int_result(r, "has_ms_data");
     return r != 0;
@@ -644,7 +1094,7 @@ bool RawFile::has_ms_data() const
 
 int RawFile::ms_instrument_count() const
 {
-    auto fn = Runtime::instance().resolve<fn_int_from_int>("H_GetMSInstrumentCount");
+    auto fn = api().H_GetMSInstrumentCount;
     int r = fn(handle_);
     check_int_result(r, "ms_instrument_count");
     return r;
@@ -654,25 +1104,25 @@ int RawFile::ms_instrument_count() const
 
 std::string RawFile::instrument_model() const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int>("H_GetInstrumentModel");
+    auto fn = api().H_GetInstrumentModel;
     return call_string_fn(fn, handle_);
 }
 
 std::string RawFile::instrument_name() const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int>("H_GetInstrumentName");
+    auto fn = api().H_GetInstrumentName;
     return call_string_fn(fn, handle_);
 }
 
 std::string RawFile::instrument_serial_number() const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int>("H_GetInstrumentSerialNumber");
+    auto fn = api().H_GetInstrumentSerialNumber;
     return call_string_fn(fn, handle_);
 }
 
 std::string RawFile::instrument_software_version() const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int>("H_GetInstrumentSoftwareVersion");
+    auto fn = api().H_GetInstrumentSoftwareVersion;
     return call_string_fn(fn, handle_);
 }
 
@@ -680,19 +1130,19 @@ std::string RawFile::instrument_software_version() const
 
 std::string RawFile::creation_date() const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int>("H_GetCreationDate");
+    auto fn = api().H_GetCreationDate;
     return call_string_fn(fn, handle_);
 }
 
 std::string RawFile::file_description() const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int>("H_GetFileDescription");
+    auto fn = api().H_GetFileDescription;
     return call_string_fn(fn, handle_);
 }
 
 int RawFile::file_revision() const
 {
-    auto fn = Runtime::instance().resolve<fn_int_from_int>("H_GetFileRevision");
+    auto fn = api().H_GetFileRevision;
     int r = fn(handle_);
     check_int_result(r, "file_revision");
     return r;
@@ -700,7 +1150,7 @@ int RawFile::file_revision() const
 
 std::string RawFile::sample_name() const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int>("H_GetSampleName");
+    auto fn = api().H_GetSampleName;
     return call_string_fn(fn, handle_);
 }
 
@@ -708,7 +1158,7 @@ std::string RawFile::sample_name() const
 
 double RawFile::retention_time(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_double_from_int_int>("H_GetRetentionTime");
+    auto fn = api().H_GetRetentionTime;
     double r = fn(handle_, scan_number);
     check_double_result(r, "retention_time");
     return r;
@@ -716,7 +1166,7 @@ double RawFile::retention_time(int scan_number) const
 
 int RawFile::ms_level(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_int_from_int_int>("H_GetMSLevel");
+    auto fn = api().H_GetMSLevel;
     int r = fn(handle_, scan_number);
     check_int_result(r, "ms_level");
     return r;
@@ -724,7 +1174,7 @@ int RawFile::ms_level(int scan_number) const
 
 bool RawFile::is_centroid_scan(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_int_from_int_int>("H_IsCentroidScan");
+    auto fn = api().H_IsCentroidScan;
     int r = fn(handle_, scan_number);
     check_int_result(r, "is_centroid_scan");
     return r != 0;
@@ -732,13 +1182,13 @@ bool RawFile::is_centroid_scan(int scan_number) const
 
 std::string RawFile::scan_filter(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int_int>("H_GetScanFilter");
+    auto fn = api().H_GetScanFilter;
     return call_string_fn(fn, handle_, scan_number);
 }
 
 int RawFile::polarity(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_int_from_int_int>("H_GetPolarity");
+    auto fn = api().H_GetPolarity;
     int r = fn(handle_, scan_number);
     check_int_result(r, "polarity");
     return r;
@@ -746,52 +1196,152 @@ int RawFile::polarity(int scan_number) const
 
 std::string RawFile::mass_analyzer_type(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int_int>("H_GetMassAnalyzerType");
+    auto fn = api().H_GetMassAnalyzerType;
     return call_string_fn(fn, handle_, scan_number);
 }
 
 std::string RawFile::ionization_mode(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int_int>("H_GetIonizationMode");
+    auto fn = api().H_GetIonizationMode;
     return call_string_fn(fn, handle_, scan_number);
 }
 
-// -- Spectrum data -------------------------------------------------
+// -- Single-pass scan reading --------------------------------------
 
-int RawFile::spectrum_peak_count(int scan_number, bool centroid) const
+void RawFile::load_layout() const
 {
-    auto fn = Runtime::instance().resolve<fn_spectrum_count>("H_GetSpectrumPeakCount");
-    int r = fn(handle_, scan_number, centroid ? 1 : 0);
-    check_int_result(r, "spectrum_peak_count");
-    return r;
+    LayoutSink sink;
+    const int n = api().H_GetTrailerLayout(handle_, &sink_alloc<LayoutSink>, &sink);
+    check_read_result(n, "trailer_layout");
+    TrailerLayout layout;
+    std::vector<std::string> names;
+    unpack_strings(sink.names, names);
+    if (names.size() != sink.labels.size()) throw bridge_error("trailer_layout: inconsistent label data");
+    layout.labels.resize(names.size());
+    for (std::size_t i = 0; i < names.size(); ++i)
+    {
+        auto& l = layout.labels[i];
+        l.label = std::move(names[i]);
+        l.kind = static_cast<TrailerKind>(sink.labels[i].kind);
+        l.slot = sink.labels[i].slot;
+        l.vendor_type = sink.labels[i].vendor_type;
+        l.selected = sink.labels[i].selected != 0;
+        switch (l.kind)
+        {
+        case TrailerKind::Double: ++layout.double_count; break;
+        case TrailerKind::Int: ++layout.int_count; break;
+        case TrailerKind::Bool: ++layout.bool_count; break;
+        default: ++layout.string_count; break;
+        }
+    }
+    layout_ = std::move(layout);
+    layout_loaded_ = true;
+}
+
+const TrailerLayout& RawFile::trailer_layout() const
+{
+    if (!layout_loaded_) load_layout();
+    return layout_;
+}
+
+void RawFile::set_trailer_selection(const std::vector<std::string>& labels)
+{
+    std::string packed;
+    for (const auto& label : labels)
+    {
+        if (label.empty()) continue;
+        packed += label;
+        packed.push_back('\0');
+    }
+    check_int_result(api().H_SetTrailerSelection(handle_, packed.empty() ? nullptr : packed.data(),
+        static_cast<int>(packed.size())), "set_trailer_selection");
+    layout_loaded_ = false;
+}
+
+ScanHeader RawFile::scan_header(int scan_number, const ReadOptions& options) const
+{
+    ReadOptions header_only = options;
+    header_only.peaks = false;
+    header_only.charges = false;
+    header_only.noise = false;
+    Spectrum spectrum;
+    read_scan(scan_number, spectrum, header_only);
+    return std::move(spectrum.header);
+}
+
+Spectrum RawFile::read_scan(int scan_number, const ReadOptions& options) const
+{
+    Spectrum spectrum;
+    read_scan(scan_number, spectrum, options);
+    return spectrum;
+}
+
+void RawFile::read_scan(int scan_number, Spectrum& out, const ReadOptions& options) const
+{
+    SpectrumSink sink{out, {}};
+    const int r = api().H_ReadScans(handle_, scan_number, scan_number, read_flags(options),
+        &sink_alloc<SpectrumSink>, &sink);
+    check_read_result(r, "read_scan");
+    sink.finish();
+}
+
+ScanBatch RawFile::read_scans(int first_scan, int last_scan, const ReadOptions& options) const
+{
+    ScanBatch batch;
+    read_scans(first_scan, last_scan, batch, options);
+    return batch;
+}
+
+void RawFile::read_scans(int first_scan, int last_scan, ScanBatch& out, const ReadOptions& options) const
+{
+    out.headers.clear();
+    out.mz.clear(); out.intensities.clear(); out.peak_offsets.clear();
+    out.charges.clear(); out.charge_offsets.clear();
+    out.noise_mz.clear(); out.noise_intensities.clear(); out.noise_baselines.clear(); out.noise_offsets.clear();
+    if (last_scan >= first_scan)
+    {
+        const auto n = static_cast<std::size_t>(last_scan) - static_cast<std::size_t>(first_scan) + 1;
+        out.headers.reserve(n);
+        out.peak_offsets.reserve(n + 1);
+        out.charge_offsets.reserve(n + 1);
+        out.noise_offsets.reserve(n + 1);
+    }
+    BatchSink sink{out, {}};
+    const int r = api().H_ReadScans(handle_, first_scan, last_scan, read_flags(options),
+        &sink_alloc<BatchSink>, &sink);
+    if (r < 0)
+    {
+        out.headers.clear();
+        out.mz.clear(); out.intensities.clear(); out.peak_offsets.clear();
+        out.charges.clear(); out.charge_offsets.clear();
+        out.noise_mz.clear(); out.noise_intensities.clear(); out.noise_baselines.clear(); out.noise_offsets.clear();
+        check_read_result(r, "read_scans");
+    }
+    sink.finish();
 }
 
 SpectrumData RawFile::spectrum_data(int scan_number, bool centroid) const
 {
-    const int count = spectrum_peak_count(scan_number, centroid);
-    if (count == 0) return {};
+    ReadOptions options;
+    options.centroid = centroid;
+    options.trailers = false;
+    Spectrum spectrum;
+    read_scan(scan_number, spectrum, options);
+    return SpectrumData{std::move(spectrum.mz), std::move(spectrum.intensities)};
+}
 
-    SpectrumData result;
-    result.mz.resize(static_cast<std::size_t>(count));
-    result.intensities.resize(static_cast<std::size_t>(count));
-
-    auto fn = Runtime::instance().resolve<fn_spectrum_data>("H_GetSpectrumData");
-    int written = fn(handle_, scan_number, centroid ? 1 : 0,
-                     result.mz.data(), result.intensities.data(), count);
-    if (written < 0)
-    {
-        check_int_result(written, "spectrum_data");
-    }
-    result.mz.resize(static_cast<std::size_t>(written));
-    result.intensities.resize(static_cast<std::size_t>(written));
-    return result;
+RawFile RawFile::thread_accessor() const
+{
+    const int handle = api().H_CreateThreadAccessor(handle_);
+    check_int_result(handle, "thread_accessor");
+    return RawFile(handle);
 }
 
 // -- Precursor / reaction ------------------------------------------
 
 double RawFile::precursor_mass(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_double_from_int_int>("H_GetPrecursorMass");
+    auto fn = api().H_GetPrecursorMass;
     double r = fn(handle_, scan_number);
     check_double_result(r, "precursor_mass");
     return r;
@@ -799,7 +1349,7 @@ double RawFile::precursor_mass(int scan_number) const
 
 int RawFile::precursor_charge(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_int_from_int_int>("H_GetPrecursorCharge");
+    auto fn = api().H_GetPrecursorCharge;
     int r = fn(handle_, scan_number);
     check_int_result(r, "precursor_charge");
     return r;
@@ -807,7 +1357,7 @@ int RawFile::precursor_charge(int scan_number) const
 
 double RawFile::collision_energy(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_double_from_int_int>("H_GetCollisionEnergy");
+    auto fn = api().H_GetCollisionEnergy;
     double r = fn(handle_, scan_number);
     check_double_result(r, "collision_energy");
     return r;
@@ -815,13 +1365,13 @@ double RawFile::collision_energy(int scan_number) const
 
 std::string RawFile::activation_type(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int_int>("H_GetActivationType");
+    auto fn = api().H_GetActivationType;
     return call_string_fn(fn, handle_, scan_number);
 }
 
 double RawFile::isolation_width(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_double_from_int_int>("H_GetIsolationWidth");
+    auto fn = api().H_GetIsolationWidth;
     double r = fn(handle_, scan_number);
     check_double_result(r, "isolation_width");
     return r;
@@ -831,7 +1381,7 @@ double RawFile::isolation_width(int scan_number) const
 
 double RawFile::base_peak_mass(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_double_from_int_int>("H_GetBasePeakMass");
+    auto fn = api().H_GetBasePeakMass;
     double r = fn(handle_, scan_number);
     check_double_result(r, "base_peak_mass");
     return r;
@@ -839,7 +1389,7 @@ double RawFile::base_peak_mass(int scan_number) const
 
 double RawFile::base_peak_intensity(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_double_from_int_int>("H_GetBasePeakIntensity");
+    auto fn = api().H_GetBasePeakIntensity;
     double r = fn(handle_, scan_number);
     check_double_result(r, "base_peak_intensity");
     return r;
@@ -847,7 +1397,7 @@ double RawFile::base_peak_intensity(int scan_number) const
 
 double RawFile::tic(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_double_from_int_int>("H_GetTIC");
+    auto fn = api().H_GetTIC;
     double r = fn(handle_, scan_number);
     check_double_result(r, "tic");
     return r;
@@ -857,7 +1407,7 @@ double RawFile::tic(int scan_number) const
 
 ChromatogramData RawFile::chromatogram_data() const
 {
-    auto fn_len = Runtime::instance().resolve<fn_chrom_len>("H_GetChromatogramLength");
+    auto fn_len = api().H_GetChromatogramLength;
     int len = fn_len(handle_);
     check_int_result(len, "chromatogram_data");
     if (len == 0) return {};
@@ -866,7 +1416,7 @@ ChromatogramData RawFile::chromatogram_data() const
     result.times.resize(static_cast<std::size_t>(len));
     result.intensities.resize(static_cast<std::size_t>(len));
 
-    auto fn_data = Runtime::instance().resolve<fn_chrom_data>("H_GetChromatogramData");
+    auto fn_data = api().H_GetChromatogramData;
     int written = fn_data(handle_, result.times.data(), result.intensities.data(), len);
     if (written < 0) check_int_result(written, "chromatogram_data");
     result.times.resize(static_cast<std::size_t>(written));
@@ -877,7 +1427,7 @@ ChromatogramData RawFile::chromatogram_data() const
 int RawFile::xic_length(double mz_start, double mz_end,
                          double rt_start_minutes, double rt_end_minutes) const
 {
-    auto fn = Runtime::instance().resolve<fn_xic_len>("H_GetXicLength");
+    auto fn = api().H_GetXicLength;
     int r = fn(handle_, mz_start, mz_end, rt_start_minutes, rt_end_minutes);
     check_int_result(r, "xic_length");
     return r;
@@ -893,7 +1443,7 @@ ChromatogramData RawFile::xic_data(double mz_start, double mz_end,
     result.times.resize(static_cast<std::size_t>(len));
     result.intensities.resize(static_cast<std::size_t>(len));
 
-    auto fn = Runtime::instance().resolve<fn_xic_data>("H_GetXicData");
+    auto fn = api().H_GetXicData;
     int written = fn(handle_, mz_start, mz_end, rt_start_minutes, rt_end_minutes,
                      result.times.data(), result.intensities.data(), len);
     if (written < 0) check_int_result(written, "xic_data");
@@ -906,7 +1456,7 @@ ChromatogramData RawFile::xic_data(double mz_start, double mz_end,
 
 int RawFile::trailer_extra_count(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_int_from_int_int>("H_GetTrailerExtraCount");
+    auto fn = api().H_GetTrailerExtraCount;
     int r = fn(handle_, scan_number);
     check_int_result(r, "trailer_extra_count");
     return r;
@@ -914,7 +1464,7 @@ int RawFile::trailer_extra_count(int scan_number) const
 
 std::vector<std::string> RawFile::trailer_extra_labels(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_trailer_labels>("H_GetTrailerExtraLabels");
+    auto fn = api().H_GetTrailerExtraLabels;
 
     // First call: get total needed size.
     int needed = fn(handle_, scan_number, nullptr, 0);
@@ -941,7 +1491,7 @@ std::vector<std::string> RawFile::trailer_extra_labels(int scan_number) const
 
 std::string RawFile::trailer_extra_value(int scan_number, const std::string& key) const
 {
-    auto fn = Runtime::instance().resolve<fn_trailer_value>("H_GetTrailerExtraValue");
+    auto fn = api().H_GetTrailerExtraValue;
     auto key_utf8 = make_utf8(key);
 
     int needed = fn(handle_, scan_number, key_utf8.data(), nullptr, 0);
@@ -959,7 +1509,7 @@ std::string RawFile::trailer_extra_value(int scan_number, const std::string& key
 
 int RawFile::instrument_method_count() const
 {
-    auto fn = Runtime::instance().resolve<fn_int_from_int>("H_GetInstrumentMethodCount");
+    auto fn = api().H_GetInstrumentMethodCount;
     int r = fn(handle_);
     check_int_result(r, "instrument_method_count");
     return r;
@@ -967,7 +1517,7 @@ int RawFile::instrument_method_count() const
 
 std::string RawFile::instrument_method(int index) const
 {
-    auto fn = Runtime::instance().resolve<fn_method>("H_GetInstrumentMethod");
+    auto fn = api().H_GetInstrumentMethod;
     int needed = fn(handle_, index, nullptr, 0);
     check_int_result(needed, "metadata query");
     if (needed == 0) return {};
@@ -979,22 +1529,31 @@ std::string RawFile::instrument_method(int index) const
     return std::string(buf.data());
 }
 
-std::string RawFile::file_metadata_json(bool include_methods, bool checksum) const
+std::string RawFile::file_metadata_json(bool include_methods) const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int_int>("H_GetFileMetadata");
-    return call_string_fn(fn, handle_, (include_methods ? 1 : 0) | (checksum ? 2 : 0));
+    auto fn = api().H_GetFileMetadata;
+    return call_string_fn(fn, handle_, include_methods ? 1 : 0);
+}
+
+std::string RawFile::file_sha1() const
+{
+    // One call: the hex digest always fits, so the file is hashed exactly once.
+    std::array<char, 128> buf{};
+    const int n = api().H_GetFileSha1(handle_, buf.data(), static_cast<int>(buf.size()));
+    check_int_result(n, "file_sha1");
+    if (static_cast<std::size_t>(n) >= buf.size()) throw bridge_error("file_sha1: unexpected digest length");
+    return std::string(buf.data(), static_cast<std::size_t>(n));
 }
 
 std::string RawFile::scan_metadata_json(int scan_number) const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int_int>("H_GetScanMetadata");
+    auto fn = api().H_GetScanMetadata;
     return call_string_fn(fn, handle_, scan_number);
 }
 
 std::vector<double> RawFile::spectrum_auxiliary_array(int scan_number, int array_kind) const
 {
-    using fn_type = int(*)(int, int, int, void*, int);
-    auto fn = Runtime::instance().resolve<fn_type>("H_GetSpectrumAuxiliaryArray");
+    auto fn = api().H_GetSpectrumAuxiliaryArray;
     int count = fn(handle_, scan_number, array_kind, nullptr, 0);
     check_int_result(count, "spectrum auxiliary array");
     if (count == 0) return {};
@@ -1007,13 +1566,13 @@ std::vector<double> RawFile::spectrum_auxiliary_array(int scan_number, int array
 
 std::string RawFile::detector_chromatograms_json() const
 {
-    auto fn = Runtime::instance().resolve<fn_str_from_int>("H_GetDetectorChromatograms");
+    auto fn = api().H_GetDetectorChromatograms;
     return call_string_fn(fn, handle_);
 }
 
 int RawFile::instrument_count(int device_type) const
 {
-    auto fn = Runtime::instance().resolve<fn_int_from_int_int>("H_GetInstrumentCount");
+    auto fn = api().H_GetInstrumentCount;
     int count = fn(handle_, device_type);
     check_int_result(count, "instrument count");
     return count;
@@ -1021,9 +1580,9 @@ int RawFile::instrument_count(int device_type) const
 
 void RawFile::select_instrument(int device_type, int instrument_number)
 {
-    using fn_type = int(*)(int, int, int);
-    auto fn = Runtime::instance().resolve<fn_type>("H_SelectInstrument");
+    auto fn = api().H_SelectInstrument;
     check_int_result(fn(handle_, device_type, instrument_number), "select instrument");
+    layout_loaded_ = false;
 }
 
 } // namespace openms::thermo_bridge

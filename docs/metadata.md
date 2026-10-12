@@ -1,12 +1,16 @@
 # Metadata for mzML writers
 
-Version 0.3.0 adds bulk metadata alongside the existing scalar convenience API.
+Version 0.3.0 added bulk JSON metadata alongside the scalar convenience API.
+Since 1.0.0, use the typed `ScanHeader` from `read_scan`/`read_scans` for
+per-scan data (see the README); the JSON snapshots below are kept for full
+dumps and debugging.
 Use the bulk scan snapshot when constructing mzML: the old precursor getters
 represent a single reaction and cannot describe an MSn/SPS hierarchy.
 
 ```cpp
 openms::thermo_bridge::RawFile raw("input.raw");
-auto file = raw.file_metadata_json(true, true); // methods, SHA-1
+auto file = raw.file_metadata_json(true); // with instrument methods
+auto sha1 = raw.file_sha1();               // explicit, reads the whole file
 auto scan = raw.scan_metadata_json(raw.first_scan_number());
 auto detectors = raw.detector_chromatograms_json();
 ```
@@ -17,11 +21,12 @@ and chromatogram times are minutes, mass coordinates are m/z, wavelengths nm,
 collision energy eV). Trailer values remain the original strings, including
 empty values and vendor label punctuation. Array order and duplicate labels
 are preserved. Callers must serialize access to the same `RawFile` handle,
-including instrument selection; independent handles can be used independently.
+including instrument selection; independent handles and `thread_accessor()`
+handles can be used concurrently.
 
 | Snapshot | Fields |
 | --- | --- |
-| File `file` | Path, RAW revision, full ISO creation timestamp, description, optional SHA-1 |
+| File `file` | Path, RAW revision, full ISO creation timestamp, description; `sha1` is always `null` since 1.0 (use `file_sha1()`) |
 | File `instrument` | Model, name, serial, acquisition software/hardware versions, units, selected controller |
 | File `run` | First/last scan numbers, actual spectrum count, RT range, expected runtime, resolution, mass limits |
 | File `sample` | Name, ID, type, comment, vial, volume, injection volume, row, dilution, method filename, internal standard, calibration level, processing method filename, weight |
@@ -36,7 +41,7 @@ controller listed in `controllers` with `select_instrument(type, number)`;
 controller numbers start at one. A newly opened file selects the first MS
 controller if present, otherwise the first supported detector. Detector trace
 extraction restores the previously selected controller, including on failure.
-PDA spectra use the normal `spectrum_data(scan, false)` API after selecting PDA;
+PDA spectra use `read_scan` with `ReadOptions::centroid = false` (or `spectrum_data(scan, false)`) after selecting PDA;
 its position array contains wavelength, not m/z.
 
 `spectrum_auxiliary_array(scan, kind)` supports:
@@ -58,9 +63,10 @@ CV helper now follows the actual vendor enum: 0 negative, 1 positive, 2 unknown.
 Use `thermo_host input.raw --metadata` for JSON Lines output: file metadata,
 all scan snapshots of the default controller, then detector chromatograms.
 The full sample and method snapshots can contain instrument paths and user
-entered text; callers can omit methods and SHA-1 using the API flags.
+entered text; callers can omit methods with the API flag. The SHA-1 is only
+computed by `file_sha1()`.
 
-Build the managed and native components from the same revision. Until a 0.3.0
+Build the managed and native components from the same revision. Until a 1.0.0
 release artifact is published, use the .NET 8 SDK source build or supply a
 matching `OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR`; old managed DLLs do not
 contain the new entry points.

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(OpenMSThermoBridge VERSION 0.3.1 LANGUAGES CXX)
+project(OpenMSThermoBridge VERSION 1.0.0 LANGUAGES CXX)
 
 include(CTest)
 include(CMakePackageConfigHelpers)
@@ -9,6 +9,7 @@ include(GNUInstallDirs)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(OPENMS_THERMO_BRIDGE_BUILD_CLI "Build the thermo_host CLI executable." ON)
+option(OPENMS_THERMO_BRIDGE_BUILD_BENCH "Build the thermo_bridge_bench benchmark/parity tool (local use)." OFF)
 option(OPENMS_THERMO_BRIDGE_ENABLE_VENDOR_DOWNLOAD "Download Thermo vendor packages during the build." OFF)
 set(OPENMS_THERMO_BRIDGE_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/thermo-feed" CACHE PATH "Directory containing the Thermo vendor .nupkg files.")
 set(OPENMS_THERMO_BRIDGE_THERMO_COMMIT "80963674b5c10e58236da63023ad6fa0264bbb00" CACHE STRING "RawFileReader commit used for vendor package snapshots.")
@@ -177,6 +178,7 @@ if(NOT OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR)
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoWrapperManaged.csproj"
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoWrapperManaged.cs"
             "${CMAKE_CURRENT_SOURCE_DIR}/ThermoMetadata.cs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/ThermoScanReader.cs"
             "${CMAKE_CURRENT_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt"
             "${OPENMS_THERMO_BRIDGE_NUGET_CONFIG}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -226,6 +228,14 @@ if(OPENMS_THERMO_BRIDGE_BUILD_CLI)
   install(TARGETS thermo_host RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
+if(OPENMS_THERMO_BRIDGE_BUILD_BENCH)
+  find_package(Threads REQUIRED)
+  add_executable(thermo_bridge_bench tools/thermo_bridge_bench.cpp)
+  target_compile_features(thermo_bridge_bench PRIVATE cxx_std_17)
+  target_link_libraries(thermo_bridge_bench PRIVATE openms_thermo_bridge Threads::Threads)
+  openms_thermo_bridge_copy_runtime_files(TARGET thermo_bridge_bench)
+endif()
+
 if(BUILD_TESTING)
   find_package(Catch2 3 CONFIG QUIET)
   if(NOT Catch2_FOUND)
@@ -254,7 +264,8 @@ if(BUILD_TESTING)
 
   add_executable(thermo_bridge_tests tests/test_thermo_bridge.cpp)
   target_compile_features(thermo_bridge_tests PRIVATE cxx_std_17)
-  target_link_libraries(thermo_bridge_tests PRIVATE openms_thermo_bridge Catch2::Catch2WithMain)
+  find_package(Threads REQUIRED)
+  target_link_libraries(thermo_bridge_tests PRIVATE openms_thermo_bridge Catch2::Catch2WithMain Threads::Threads)
   target_compile_definitions(thermo_bridge_tests PRIVATE
     OPENMS_THERMO_BRIDGE_TEST_SAMPLE_RAW="$<IF:$<BOOL:${OPENMS_THERMO_BRIDGE_DOWNLOAD_TEST_DATA}>,${OPENMS_THERMO_BRIDGE_SAMPLE_RAW_FILE},>"
     OPENMS_THERMO_BRIDGE_TEST_EXPECTED_SCAN_COUNT=90)

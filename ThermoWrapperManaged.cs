@@ -28,17 +28,55 @@ namespace ThermoWrapperManaged
     // ----------------------------------------------------------------
     // Handle-based file pool so a RAW file can be opened once and
     // queried many times without repeated open/close overhead.
+    //
+    // Files are opened through the vendor thread manager. Every handle
+    // owns one thread accessor (IRawDataPlus); further accessors for
+    // other threads share the manager, which is disposed with the last
+    // handle. Per-handle state (controller, trailer layout/selection)
+    // lives in OpenFile.
     // ----------------------------------------------------------------
+    internal sealed class SharedFile
+    {
+        public readonly IRawFileThreadManager Manager;
+        public int References;
+        public SharedFile(IRawFileThreadManager manager) { Manager = manager; References = 1; }
+    }
+
+    internal sealed class OpenFile
+    {
+        public readonly IRawDataPlus Raw;
+        public readonly SharedFile Shared;
+        public TrailerLayoutCache? Layout;
+        public string[]? TrailerSelection;
+        public OpenFile(IRawDataPlus raw, SharedFile shared) { Raw = raw; Shared = shared; }
+    }
+
     internal static class FilePool
     {
-        private static readonly ConcurrentDictionary<int, IRawDataPlus> _files = new();
+        private static readonly ConcurrentDictionary<int, OpenFile> _files = new();
         private static int _nextHandle = 0;
 
         public static int Open(string filePath)
         {
-            var rawFile = RawFileReaderAdapter.FileFactory(filePath);
-            if (rawFile == null || !rawFile.IsOpen || rawFile.IsError)
-                return Err.FileNotFound;
+            var manager = RawFileReaderAdapter.ThreadedFileFactory(filePath);
+            if (manager == null) return Err.FileNotFound;
+            IRawDataPlus? rawFile = null;
+            try
+            {
+                rawFile = manager.CreateThreadAccessor();
+                if (rawFile == null || !rawFile.IsOpen || rawFile.IsError)
+                {
+                    rawFile?.Dispose();
+                    manager.Dispose();
+                    return Err.FileNotFound;
+                }
+            }
+            catch
+            {
+                rawFile?.Dispose();
+                manager.Dispose();
+                throw;
+            }
             int handle = System.Threading.Interlocked.Increment(ref _nextHandle);
             foreach (var device in RawBridge.SupportedDevices)
             {
@@ -47,21 +85,64 @@ namespace ThermoWrapperManaged
                 RawBridge.SelectedControllers[handle] = (device, 1);
                 break;
             }
-            _files[handle] = rawFile;
+            _files[handle] = new OpenFile(rawFile, new SharedFile(manager));
             return handle;
+        }
+
+        /// New handle with its own accessor on the same open file. Copies the
+        /// controller selection and trailer selection of the source handle.
+        public static int CreateAccessor(int sourceHandle)
+        {
+            if (!_files.TryGetValue(sourceHandle, out var source)) return Err.BadHandle;
+            lock (source.Shared)
+            {
+                if (source.Shared.References <= 0) return Err.BadHandle;
+                source.Shared.References++;
+            }
+            IRawDataPlus? rawFile = null;
+            try
+            {
+                rawFile = source.Shared.Manager.CreateThreadAccessor();
+                int handle = System.Threading.Interlocked.Increment(ref _nextHandle);
+                if (RawBridge.SelectedControllers.TryGetValue(sourceHandle, out var selected))
+                {
+                    rawFile.SelectInstrument(selected.Type, selected.Number);
+                    RawBridge.SelectedControllers[handle] = selected;
+                }
+                _files[handle] = new OpenFile(rawFile, source.Shared) { TrailerSelection = source.TrailerSelection };
+                return handle;
+            }
+            catch
+            {
+                rawFile?.Dispose();
+                Release(source.Shared);
+                throw;
+            }
         }
 
         public static bool TryGet(int handle, out IRawDataPlus rawFile)
         {
-            return _files.TryGetValue(handle, out rawFile!);
+            if (_files.TryGetValue(handle, out var entry)) { rawFile = entry.Raw; return true; }
+            rawFile = null!;
+            return false;
         }
+
+        public static bool TryGetEntry(int handle, out OpenFile entry) => _files.TryGetValue(handle, out entry!);
 
         public static void Close(int handle)
         {
-            if (_files.TryRemove(handle, out var rawFile))
+            if (_files.TryRemove(handle, out var entry))
             {
-                rawFile.Dispose();
+                entry.Raw.Dispose();
+                Release(entry.Shared);
             }
+        }
+
+        private static void Release(SharedFile shared)
+        {
+            bool dispose;
+            lock (shared) { dispose = --shared.References == 0; }
+            if (dispose) shared.Manager.Dispose();
         }
     }
 
@@ -577,74 +658,7 @@ namespace ThermoWrapperManaged
             return reaction?.IsolationWidth ?? 0.0;
         }
 
-        // =============================================================
-        //  Spectrum data (m/z + intensity arrays)
-        // =============================================================
-
-        /// <summary>
-        /// Returns the peak count for the given scan.
-        /// If centroid != 0, centroided data is returned; otherwise profile.
-        /// </summary>
-        [UnmanagedCallersOnly(EntryPoint = "H_GetSpectrumPeakCount")]
-        public static int H_GetSpectrumPeakCount(int handle, int scanNumber, int centroid)
-        {
-            try
-            {
-                if (!FilePool.TryGet(handle, out var rf)) return Err.BadHandle;
-                return H_GetSpectrumPeakCountImpl(rf, scanNumber, centroid != 0);
-            }
-            catch (Exception) { return Err.Exception; }
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static int H_GetSpectrumPeakCountImpl(IRawDataPlus rf, int scanNumber, bool centroid)
-        {
-            return SpectrumArrays(rf, scanNumber, centroid).Masses.Length;
-        }
-
-        // Low-resolution scans can contain centroided segmented data without a
-        // centroid stream. Software centroiding also returns segmented data.
-        // Use the same selection for the size query and the following copy.
-        private static (double[] Masses, double[] Intensities) SpectrumArrays(IRawDataPlus rf, int scanNumber, bool centroid)
-        {
-            var scan = Scan.FromFile(rf, scanNumber);
-            if (centroid && scan.HasCentroidStream)
-                return (scan.CentroidScan.Masses, scan.CentroidScan.Intensities);
-
-            var segmented = scan.SegmentedScan;
-            if (centroid && segmented.PositionCount > 0 &&
-                rf.GetScanEventForScanNumber(scanNumber).ScanData == ThermoFisher.CommonCore.Data.FilterEnums.ScanDataType.Profile)
-                segmented = Scan.ToCentroid(scan).SegmentedScan;
-            return (segmented.Positions ?? Array.Empty<double>(), segmented.Intensities ?? Array.Empty<double>());
-        }
-
-        /// <summary>
-        /// Fills mzBuffer and intBuffer with the spectrum data for the given scan.
-        /// Returns the number of peaks actually written (may be less than bufferSize).
-        /// </summary>
-        [UnmanagedCallersOnly(EntryPoint = "H_GetSpectrumData")]
-        public static int H_GetSpectrumData(int handle, int scanNumber, int centroid,
-            IntPtr mzBuffer, IntPtr intBuffer, int bufferSize)
-        {
-            try
-            {
-                if (!FilePool.TryGet(handle, out var rf)) return Err.BadHandle;
-                return H_GetSpectrumDataImpl(rf, scanNumber, centroid != 0, mzBuffer, intBuffer, bufferSize);
-            }
-            catch (Exception) { return Err.Exception; }
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static int H_GetSpectrumDataImpl(IRawDataPlus rf, int scanNumber, bool centroid,
-            IntPtr mzBuffer, IntPtr intBuffer, int bufferSize)
-        {
-            var (masses, intensities) = SpectrumArrays(rf, scanNumber, centroid);
-            if (masses.Length != intensities.Length) throw new InvalidOperationException("Inconsistent spectrum array lengths");
-            int count = Math.Min(masses.Length, bufferSize);
-            Marshal.Copy(masses, 0, mzBuffer, count);
-            Marshal.Copy(intensities, 0, intBuffer, count);
-            return count;
-        }
+        // Spectrum data: see H_ReadScans in ThermoScanReader.cs (single pass).
 
         // =============================================================
         //  Chromatogram (TIC) data
