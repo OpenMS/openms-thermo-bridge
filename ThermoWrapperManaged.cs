@@ -100,13 +100,6 @@ namespace ThermoWrapperManaged
                 }
                 manager = RawFileReaderAdapter.RandomAccessThreadedFileFactory(remote.Name, Remote.RemoteViewCollectionManager.Instance);
             }
-            else if (Environment.GetEnvironmentVariable("THERMO_BRIDGE_FORCE_VENDOR_PLUGIN") == "1")
-            {
-                // Diagnostic only: Thermo's own random-access plug-in on a local file, to separate
-                // the cost of the vendor random-access code path from that of the range reader.
-                manager = RawFileReaderAdapter.RandomAccessThreadedFileFactory(filePath,
-                    ThermoFisher.CommonCore.RandomAccessReaderPlugin.RandomAccessFileManager.Instance);
-            }
             else
             {
                 manager = RawFileReaderAdapter.ThreadedFileFactory(filePath);

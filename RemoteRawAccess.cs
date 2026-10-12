@@ -1,15 +1,12 @@
 // EXPERIMENTAL: read Thermo RAW files over HTTP(S) / S3 (or a local file via the same path)
 // through the RawFileReader "delegated random access" plug-in interface.
 //
-// The vendor loader (RandomAccessRawFileLoader) asks an IViewCollectionManager for
-// IReadWriteAccessor views at (offset, size). Thermo's own implementation
-// (RandomAccessReaderPlugin.RandomAccessFileManager) reads a local file handle; this one
-// serves the same calls from a block cache filled by ranged reads of a RangeSource.
-// Accessor semantics mirror the vendor plug-in (offsets relative to the view's
-// InitialOffset, Length = whole file, sub-views < 2 MB copied into a MemoryArrayAccessor),
-// except PreferLargeReads = false by default: like the memory-mapped reader used for normal
-// local opens, the vendor then reads fields one by one (served from the cache) instead of
-// fixed 1 MB / multi-MB batches, which over-fetch badly on random access.
+// RawFileReaderAdapter.RandomAccessThreadedFileFactory takes a public IViewCollectionManager
+// that hands out IReadWriteAccessor views at (offset, size). This implementation serves those
+// views from a block cache filled by ranged reads of a RangeSource. Offsets passed to an
+// accessor are relative to its InitialOffset. PreferLargeReads is false by default: measured
+// with the request trace below, true makes the reader request large fixed-size batches that
+// over-fetch badly on random access.
 //
 // Environment (all optional):
 //   THERMO_BRIDGE_REMOTE_BLOCK_KB     cache block size in KiB (default 512); smaller blocks
@@ -18,13 +15,12 @@
 //   THERMO_BRIDGE_REMOTE_CACHE_MB     cache capacity in MiB per file (default 256)
 //   THERMO_BRIDGE_REMOTE_READAHEAD_KB max readahead window in KiB for sequential streams (default 8192)
 //   THERMO_BRIDGE_REMOTE_PARALLEL     max concurrent range requests per multi-block fetch (default 4)
-//   THERMO_BRIDGE_REMOTE_LARGE_READS  "1": PreferLargeReads = true (vendor plug-in behaviour)
-//   THERMO_BRIDGE_REMOTE_CHUNK_KB     with LARGE_READS=1: vendor record batch size in KiB
-//                                     (default: plug-in heuristic, 1-8 MB)
+//   THERMO_BRIDGE_REMOTE_LARGE_READS  "1": PreferLargeReads = true (larger batched reads)
+//   THERMO_BRIDGE_REMOTE_CHUNK_KB     with LARGE_READS=1: SuggestedChunkSize in KiB
+//                                     (default: 1-8 MB depending on the view size)
 //   THERMO_BRIDGE_REMOTE_STATS        "1": print request/byte counters to stderr on close
 //   THERMO_BRIDGE_REMOTE_TRACE        "1": print every range request with its stack to stderr
 //   THERMO_BRIDGE_FORCE_RANGE_READER  "1": open local files through this path too (testing)
-//   THERMO_BRIDGE_FORCE_VENDOR_PLUGIN "1": open local files with Thermo's plug-in (diagnostics)
 //   THERMO_BRIDGE_S3_ANONYMOUS        "1": do not sign S3 requests
 //   AWS_ENDPOINT_URL[_S3], AWS_REGION and the standard AWS credential chain for s3:// URLs.
 using System;
@@ -343,7 +339,6 @@ namespace ThermoWrapperManaged.Remote
         public long Misses => Interlocked.Read(ref _misses);
 
         /// Copy [offset, offset + dst.Length) into dst; bytes past the end of the file are zeroed
-        /// (same as the vendor plug-in's short RandomAccess.Read).
         public void Read(long offset, Span<byte> dst) => Read(offset, dst, out _);
 
         /// As Read; also returns the last block touched (null if none) for RangeAccessor's fast path.
@@ -406,8 +401,8 @@ namespace ThermoWrapperManaged.Remote
                     run.Add(AddBlock(next));
                     Interlocked.Increment(ref _misses);
                 }
-                // Sequential readahead: the vendor reads several regions in interleaved sequential
-                // streams (scan index, packets, trailers), so track a few stream cursors. A miss that
+                // Sequential readahead: reads arrive as several interleaved sequential streams
+                // (observed in the request trace), so track a few stream cursors. A miss that
                 // starts where a stream's last fetch ended extends that stream by a window that
                 // doubles per miss (up to _readahead blocks); other misses start a new stream with
                 // no readahead, so random access fetches only the blocks it touches.
@@ -525,7 +520,7 @@ namespace ThermoWrapperManaged.Remote
                 ? (chunkKb < 0 ? -1 : chunkKb * 1024) : -1;
         }
 
-        /// SuggestedChunkSize for accessors; -1 = vendor plug-in heuristic.
+        /// SuggestedChunkSize for accessors; -1 = size-based default.
         public readonly int ChunkSize;
         /// PreferLargeReads for accessors.
         public readonly bool LargeReads = Environment.GetEnvironmentVariable("THERMO_BRIDGE_REMOTE_LARGE_READS") == "1";
@@ -647,7 +642,7 @@ namespace ThermoWrapperManaged.Remote
     }
 
     // ----------------------------------------------------------------
-    // Read-only accessor with the vendor plug-in's offset semantics; all bytes come from the cache.
+    // Read-only accessor; offsets are relative to InitialOffset and all bytes come from the cache.
     // ----------------------------------------------------------------
     internal sealed class RangeAccessor : IReadWriteAccessor, IReaderIssues
     {
@@ -669,9 +664,7 @@ namespace ThermoWrapperManaged.Remote
                 MaxSize = Length - initialOffset;
                 if (!permitMissingData) throw new ArgumentException("size beyond end of file", nameof(size));
             }
-            // The vendor batches record reads (scan data, trailers) into chunks of this size.
-            // 0 makes it read records one by one through the block cache (fewer bytes on random
-            // access, but much more CPU on full passes).
+            // Only relevant with PreferLargeReads = true.
             SuggestedChunkSize = file.ChunkSize >= 0 ? file.ChunkSize
                 : size > (1L << 30) ? 8 << 20 : size > (256L << 20) ? 4 << 20 : size > (64L << 20) ? 2 << 20 : 1 << 20;
         }
