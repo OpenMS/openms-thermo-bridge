@@ -19,7 +19,7 @@ int main(int argc, char* argv[])
         if (argc >= 3 && std::string(argv[2]) == "--metadata")
         {
             openms::thermo_bridge::RawFile raw(argv[1]);
-            std::cout << raw.file_metadata_json(true, true) << '\n';
+            std::cout << raw.file_metadata_json(true) << '\n';
             for (int scan = raw.first_scan_number(); scan <= raw.last_scan_number(); ++scan)
                 std::cout << raw.scan_metadata_json(scan) << '\n';
             std::cout << raw.detector_chromatograms_json() << '\n';
@@ -68,7 +68,7 @@ int main(int argc, char* argv[])
             std::cout << "  Scan " << s << ": MS" << raw.ms_level(s)
                       << " RT=" << std::fixed << std::setprecision(4) << raw.retention_time(s) << " min"
                       << " centroid=" << (raw.is_centroid_scan(s) ? "yes" : "no")
-                      << " peaks=" << raw.spectrum_peak_count(s)
+                      << " peaks=" << raw.read_scan(s).mz.size()
                       << " TIC=" << std::scientific << raw.tic(s)
                       << " filter=" << raw.scan_filter(s) << '\n';
         }

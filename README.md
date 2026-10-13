@@ -1,10 +1,14 @@
 # OpenMS Thermo Raw File Bridge
 
-A CMake-packaged native C++ bridge that embeds the .NET runtime, calls the official ThermoFisher RawFileReader libraries through a managed shim, and exposes Thermo RAW scan counting to native consumers.
+A CMake-packaged native C++ bridge that embeds the .NET runtime, calls the official ThermoFisher RawFileReader libraries through a managed shim, and exposes Thermo RAW spectra, chromatograms and metadata to native consumers.
+
+Version 1.0.0 (`OPENMS_THERMO_BRIDGE_API_VERSION 1`) is a performance redesign with
+a typed, single-pass scan API. It contains breaking changes; see
+[Migrating from 0.3.x](#migrating-from-03x).
 
 ## What This Does
 - Builds a native bridge library and the `thermo_host` CLI with CMake
-- Publishes a managed bridge with an `UnmanagedCallersOnly` `GetScanCount` entry point
+- Publishes a managed bridge with `UnmanagedCallersOnly` entry points, resolved once per process
 - Packages exported CMake targets for `add_subdirectory`/FetchContent and `find_package(... CONFIG)` workflows
 - Runs a small Catch2-based test suite through CTest
 - Supports Linux, macOS, and Windows builds
@@ -137,6 +141,7 @@ license (`License.doc` in https://github.com/thermofisherlsms/RawFileReader).
 - [x] Native C++ bridge library and CLI
 - [x] Catch2/CTest integration tests
 - [x] Exported CMake package config
+- [x] Single-pass typed scan API, batch reads and thread accessors (1.0.0)
 
 ## mzML metadata API
 
@@ -144,3 +149,117 @@ The bulk metadata API preserves full sample/run metadata, scan trailers, ordered
 MSn reactions, detector channels and independent noise arrays. See
 [the schema and usage notes](docs/metadata.md). For an inspectable JSON Lines
 snapshot, run `thermo_host input.raw --metadata`.
+
+## Scan reading API (1.0)
+
+```cpp
+using namespace openms::thermo_bridge;
+RawFile raw("input.raw");
+const TrailerLayout& layout = raw.trailer_layout();          // once per file/controller
+const int inj = layout.find("Ion Injection Time (ms):");      // -1 if absent
+raw.set_trailer_selection({"Ion Injection Time (ms):", "Charge State:",
+                           "Monoisotopic M/Z:", "Master Scan Number:"}); // optional
+
+Spectrum s;                                                    // buffers are reused
+for (int n = raw.first_scan_number(); n <= raw.last_scan_number(); ++n)
+{
+  raw.read_scan(n, s);                // one managed call, scan decoded/centroided once
+  const ScanHeader& h = s.header;     // ms_order, polarity, RT, TIC, base peak, filter, reactions...
+  double it = inj >= 0 ? h.trailer_as_double(layout, inj) : 0.0;
+  // s.mz is sorted ascending; s.intensities has the same length
+}
+```
+
+- **Single pass.** `read_scan` returns the `ScanHeader`, typed trailer values and
+  the peaks from one managed call. The native side passes an allocator callback,
+  so the managed code writes straight into the `std::vector`s. `ReadOptions`
+  selects centroid/profile, header-only reads (`peaks = false`), trailers,
+  vendor-formatted trailer text, centroid charges and noise arrays.
+- **Sorted output.** Peak arrays are always sorted by ascending m/z (a stable
+  sort is applied only when the vendor data is not already sorted), so callers
+  can drop their sort checks. `header.peak_source` reports whether peaks came
+  from the native centroid stream, the segmented scan or the RawFileReader
+  centroider.
+- **Typed trailers.** `trailer_layout()` lists every trailer label of the
+  selected controller once, with its value kind and slot. Each header carries
+  only the value arrays (`trailer_doubles/ints/bools/strings`). Look up a label
+  index once with `layout.find(label)`, then use `trailer_double/int/bool/string`
+  or `trailer_as_double`. `set_trailer_selection` skips parsing labels you do
+  not need; slots stay stable. Labels and the vendor-formatted strings are
+  returned only if `ReadOptions::trailer_text` is set.
+- **Batches.** `read_scans(first, last)` reads an inclusive scan range in one
+  call into a `ScanBatch`, which packs the peaks into flat arrays with
+  `peak_offsets` (size n+1) and also has offsets for charges and noise.
+- **Enums.** `MsOrder` (`Par`/`Nl`/`Ng`/`Ms..Ms10`), `Polarity`,
+  `analyzer`/`ionization` and `Reaction::activation` use the RawFileReader enum
+  values. `ms_order_name`, `mass_analyzer_name`, `ionization_mode_name` and
+  `activation_type_name` give the vendor names used in the JSON/string APIs.
+- **No hidden full-file passes.** `file_metadata_json()` no longer hashes the
+  file. Call `file_sha1()` explicitly when a checksum is needed.
+  `chromatogram_data()` (TIC) is a cheap vendor index read; it can also be built
+  from `ScanHeader::tic`.
+- **Call overhead.** All managed entry points are resolved once when the
+  runtime starts and kept in a function-pointer table. The hot path takes no
+  lock and does no string lookups.
+
+### Threads
+
+`RawFile::thread_accessor()` returns a new handle on the same open file. It is
+backed by the RawFileReader `IRawFileThreadManager`, so the file index is
+shared. Each accessor owns its vendor reader, controller selection and trailer
+selection, and stays valid after the source `RawFile` is closed. Use one
+`RawFile` per thread: one handle must not be used by two threads at once, but
+distinct handles and accessors may run concurrently. The test suite checks
+that concurrent reads through accessors give results identical to sequential
+reads. Scaling is limited, with about 1.5-1.8x at 2-4 threads on the DIA
+fixture below, because of vendor-internal work and .NET GC allocation.
+`DOTNET_gcServer=1` helps a bit. Beyond 4 threads, throughput drops.
+
+### Performance
+
+These numbers are from macOS arm64 running x64 .NET under Rosetta, on a
+92,778-scan FAIMS-DIA Orbitrap file (PXD029902, `20210213_WTC11_DIA_5CV.raw`).
+They are for comparison only.
+
+| Path | Wall time | per scan |
+| --- | --- | --- |
+| 0.3.1: `scan_metadata_json` + `spectrum_data` (centroid) | 6.08 s | 65.5 µs |
+| 1.0: `read_scan` (header + all typed trailers + centroid peaks) | 0.78 s | 8.5 µs |
+| 1.0: `read_scan` (header + centroid peaks) | 0.29 s | 3.1 µs |
+| 1.0: `read_scans`, batch 256 | 0.80 s | 8.6 µs |
+| 1.0: 4 thread accessors, `read_scans` | 0.48 s | 5.1 µs |
+| 0.3.1: `spectrum_data` (profile) | 0.76 s | 8.2 µs |
+| 1.0: `read_scan` (profile) | 0.45 s | 4.8 µs |
+| 0.3.1: `file_metadata_json(…, checksum=true)` | +0.6 s before the first scan | |
+| 1.0: `file_sha1()` (explicit) | 0.63 s | |
+
+`tools/thermo_bridge_bench.cpp` measures these paths. Build it with
+`-DOPENMS_THERMO_BRIDGE_BUILD_BENCH=ON`, then run
+`thermo_bridge_bench file.raw [--threads N] [--batch B] [--dump out.jsonl]`.
+`tools/compare_parity.py baseline.jsonl new.jsonl` compares a 1.0 dump with a
+0.3.1 dump: peaks bit for bit, auxiliary arrays, headers, reactions, trailers,
+legacy JSON, SHA-1 and TIC. Both tools are for local use only and need RAW
+files that are not part of the repository. They are not run in CI.
+
+## Migrating from 0.3.x
+
+| 0.3.x | 1.0 |
+| --- | --- |
+| `spectrum_peak_count(scan, centroid)` + `spectrum_data(scan, centroid)` | `read_scan(scan, spectrum, opts)`; `spectrum_peak_count` is removed |
+| `scan_metadata_json(scan)` per scan | `read_scan` / `scan_header` → `ScanHeader` (JSON kept for debugging) |
+| `file_metadata_json(methods, checksum)` | `file_metadata_json(methods)` + `file_sha1()`; `file.sha1` is now always `null` |
+| `trailer_extra_value(scan, "Charge State:")` | `layout.find("Charge State:")` once, then `header.trailer_int(layout, idx)` |
+| per-field getters (`retention_time`, `ms_level`, `scan_filter`, …) | `ScanHeader` fields (getters are kept but each one is a separate managed call) |
+| loop over scans | `read_scans(first, last)` for a range |
+| one `RawFile` per thread (reopens the file) | `raw.thread_accessor()` |
+| check/sort m/z order | peaks are guaranteed sorted ascending |
+
+Other changes:
+
+- The managed `H_GetSpectrumPeakCount` / `H_GetSpectrumData` entry points are
+  removed.
+- Native and managed builds must come from the same revision. A 0.3.x managed
+  DLL is rejected at runtime start because it lacks the 1.0 entry points.
+- `spectrum_data(scan, centroid)` remains as a thin wrapper around `read_scan`.
+- `chromatogram_data`, XIC, `detector_chromatograms_json` and
+  `spectrum_auxiliary_array` are unchanged.

@@ -5,7 +5,6 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text.Json;
 using ThermoFisher.CommonCore.Data;
 using ThermoFisher.CommonCore.Data.Business;
@@ -109,12 +108,8 @@ namespace ThermoWrapperManaged
                 for (int i = 0; i < Math.Min(labels.Length, values.Length); ++i)
                     user.Add(new { label = labels[i], value = values[i] });
 
+            // The checksum is a separate call (H_GetFileSha1) since v1.0; "sha1" stays for schema 1.
             string? checksum = null;
-            if ((flags & 2) != 0)
-            {
-                using var stream = File.OpenRead(rf.FileName);
-                checksum = Convert.ToHexString(SHA1.HashData(stream)).ToLowerInvariant();
-            }
             return new
             {
                 schema_version = 1,

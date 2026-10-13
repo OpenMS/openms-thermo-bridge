@@ -1,8 +1,13 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <memory>
+#include <stdexcept>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -317,12 +322,11 @@ TEST_CASE("RawFile ionization_mode returns a string")
 //  Spectrum data (mirrors SpectrumWriter m/z+intensity extraction)
 // ================================================================
 
-TEST_CASE("RawFile spectrum_peak_count returns positive for valid scan")
+TEST_CASE("RawFile read_scan returns peaks for valid scan")
 {
     TestFile tf;
     int first = tf.file->first_scan_number();
-    int count = tf.file->spectrum_peak_count(first, true);
-    CHECK(count > 0);
+    CHECK(!tf.file->read_scan(first).mz.empty());
 }
 
 TEST_CASE("RawFile spectrum_data returns non-empty arrays")
@@ -362,8 +366,8 @@ TEST_CASE("RawFile profile spectrum_data is larger than centroid")
 {
     TestFile tf;
     int first = tf.file->first_scan_number();
-    int centroid_count = tf.file->spectrum_peak_count(first, true);
-    int profile_count = tf.file->spectrum_peak_count(first, false);
+    auto centroid_count = tf.file->spectrum_data(first, true).mz.size();
+    auto profile_count = tf.file->spectrum_data(first, false).mz.size();
     // Profile data should typically have more points than centroid.
     // In some edge cases they may be equal, but profile should never be less.
     CHECK(profile_count >= centroid_count);
@@ -384,7 +388,6 @@ TEST_CASE("Low-resolution MSn segmented centroids are retained")
         const auto centroid = raw.spectrum_data(scan, true);
         REQUIRE(!centroid.mz.empty());
         CHECK(centroid.mz.size() == centroid.intensities.size());
-        CHECK(raw.spectrum_peak_count(scan, true) == centroid.mz.size());
         if (raw.is_centroid_scan(scan))
         {
             CHECK(centroid.mz == acquired.mz);
@@ -702,8 +705,7 @@ TEST_CASE("Iterate all scans checking MS level and spectrum data")
         if (level >= 2) ++ms2_count;
 
         // Every scan should have some data
-        int peaks = tf.file->spectrum_peak_count(s, true);
-        CHECK(peaks >= 0);
+        CHECK(tf.file->spectrum_data(s, true).mz.size() == tf.file->spectrum_data(s, true).intensities.size());
 
         // Retention time should be non-negative
         CHECK(tf.file->retention_time(s) >= 0.0);
@@ -718,7 +720,7 @@ TEST_CASE("Iterate all scans checking MS level and spectrum data")
 TEST_CASE("Bulk metadata preserves provenance and all trailer labels")
 {
     TestFile tf;
-    const auto metadata = tf.file->file_metadata_json(false, false);
+    const auto metadata = tf.file->file_metadata_json(false);
     CHECK(metadata.find("\"schema_version\":1") != std::string::npos);
     CHECK(metadata.find("\"instrument_methods\":[]") != std::string::npos);
     CHECK(metadata.find("\"sha1\":null") != std::string::npos);
@@ -781,4 +783,383 @@ TEST_CASE("PDA spectra expose wavelength windows and controller native IDs")
     const auto before = tf.file->scan_metadata_json(scan);
     tf.file->detector_chromatograms_json();
     CHECK(tf.file->scan_metadata_json(scan) == before);
+}
+
+// ================================================================
+//  v1 single-pass API
+// ================================================================
+
+namespace tb = openms::thermo_bridge;
+
+TEST_CASE("read_scan header matches the per-field getters for every scan")
+{
+    TestFile tf;
+    auto& raw = *tf.file;
+    tb::Spectrum spectrum;
+    for (int s = raw.first_scan_number(); s <= raw.last_scan_number(); ++s)
+    {
+        raw.read_scan(s, spectrum);
+        const auto& h = spectrum.header;
+        CHECK(h.scan_number == s);
+        CHECK(h.controller_type == 0);
+        CHECK(h.controller_number == 1);
+        CHECK(h.ms_level() == raw.ms_level(s));
+        CHECK(h.retention_time == raw.retention_time(s));
+        CHECK(static_cast<int>(h.polarity) == raw.polarity(s));
+        CHECK(h.centroid == raw.is_centroid_scan(s));
+        CHECK(h.filter == raw.scan_filter(s));
+        CHECK(h.tic == raw.tic(s));
+        CHECK(h.base_peak_mass == raw.base_peak_mass(s));
+        CHECK(h.base_peak_intensity == raw.base_peak_intensity(s));
+        CHECK(tb::mass_analyzer_name(h.analyzer) == raw.mass_analyzer_type(s));
+        CHECK(tb::ionization_mode_name(h.ionization) == raw.ionization_mode(s));
+        CHECK(h.native_id() == "controllerType=0 controllerNumber=1 scan=" + std::to_string(s));
+        CHECK(h.reactions.empty());
+        CHECK(h.peak_source == tb::PeakSource::CentroidStream);
+    }
+}
+
+TEST_CASE("read_scan peaks equal spectrum_data and are sorted by m/z")
+{
+    TestFile tf;
+    auto& raw = *tf.file;
+    for (bool centroid : {true, false})
+    {
+        tb::ReadOptions options;
+        options.centroid = centroid;
+        for (int s = raw.first_scan_number(); s <= raw.last_scan_number(); s += 7)
+        {
+            const auto spectrum = raw.read_scan(s, options);
+            const auto legacy = raw.spectrum_data(s, centroid);
+            CHECK(spectrum.mz == legacy.mz);
+            CHECK(spectrum.intensities == legacy.intensities);
+            CHECK(std::is_sorted(spectrum.mz.begin(), spectrum.mz.end()));
+            CHECK(spectrum.charges.empty());
+            CHECK(spectrum.noise_mz.empty());
+            if (!centroid) CHECK(spectrum.header.peak_source == tb::PeakSource::Segmented);
+        }
+    }
+}
+
+TEST_CASE("read_scan charges and noise match spectrum_auxiliary_array")
+{
+    TestFile tf;
+    auto& raw = *tf.file;
+    tb::ReadOptions options;
+    options.charges = true;
+    options.noise = true;
+    const int s = raw.first_scan_number();
+    const auto spectrum = raw.read_scan(s, options);
+    const auto fast = raw.read_scan(s);
+    CHECK(spectrum.mz == fast.mz);
+    CHECK(spectrum.charges.size() == spectrum.mz.size());
+    CHECK(spectrum.charges == raw.spectrum_auxiliary_array(s, 0));
+    CHECK(spectrum.noise_mz == raw.spectrum_auxiliary_array(s, 1));
+    CHECK(spectrum.noise_intensities == raw.spectrum_auxiliary_array(s, 2));
+    CHECK(spectrum.noise_baselines == raw.spectrum_auxiliary_array(s, 3));
+    CHECK(!spectrum.noise_mz.empty());
+}
+
+TEST_CASE("read_scan reuses a Spectrum without leaking previous data")
+{
+    TestFile tf;
+    auto& raw = *tf.file;
+    tb::Spectrum spectrum;
+    tb::ReadOptions noise;
+    noise.noise = true;
+    noise.charges = true;
+    noise.trailer_text = true;
+    raw.read_scan(raw.first_scan_number(), spectrum, noise);
+    REQUIRE(!spectrum.noise_mz.empty());
+    tb::ReadOptions header_only;
+    header_only.peaks = false;
+    header_only.trailers = false;
+    raw.read_scan(raw.first_scan_number() + 1, spectrum, header_only);
+    CHECK(spectrum.mz.empty());
+    CHECK(spectrum.charges.empty());
+    CHECK(spectrum.noise_mz.empty());
+    CHECK(spectrum.header.trailer_doubles.empty());
+    CHECK(spectrum.header.trailer_text.empty());
+    CHECK(spectrum.header.peak_source == tb::PeakSource::None);
+    CHECK(spectrum.header.scan_number == raw.first_scan_number() + 1);
+}
+
+TEST_CASE("scan_header equals the header of read_scan")
+{
+    TestFile tf;
+    auto& raw = *tf.file;
+    const int s = raw.last_scan_number();
+    const auto header = raw.scan_header(s);
+    const auto spectrum = raw.read_scan(s);
+    CHECK(header.scan_number == s);
+    CHECK(header.filter == spectrum.header.filter);
+    CHECK(header.retention_time == spectrum.header.retention_time);
+    CHECK(header.trailer_doubles == spectrum.header.trailer_doubles);
+    CHECK(header.trailer_ints == spectrum.header.trailer_ints);
+    CHECK(header.peak_source == tb::PeakSource::None);
+}
+
+TEST_CASE("read_scans batch equals single reads")
+{
+    TestFile tf;
+    auto& raw = *tf.file;
+    const int first = raw.first_scan_number();
+    const int last = raw.last_scan_number();
+    tb::ReadOptions options;
+    options.charges = true;
+    const auto batch = raw.read_scans(first, last, options);
+    REQUIRE(batch.size() == static_cast<std::size_t>(last - first + 1));
+    REQUIRE(batch.peak_offsets.size() == batch.size() + 1);
+    REQUIRE(batch.charge_offsets.size() == batch.size() + 1);
+    REQUIRE(batch.noise_offsets.size() == batch.size() + 1);
+    CHECK(batch.peak_offsets.back() == batch.mz.size());
+    CHECK(batch.mz.size() == batch.intensities.size());
+    for (std::size_t i = 0; i < batch.size(); ++i)
+    {
+        const auto single = raw.read_scan(first + static_cast<int>(i), options);
+        const auto b = batch.peak_offsets[i];
+        CHECK(batch.headers[i].scan_number == first + static_cast<int>(i));
+        CHECK(batch.headers[i].filter == single.header.filter);
+        CHECK(batch.headers[i].trailer_doubles == single.header.trailer_doubles);
+        CHECK(batch.peak_count(i) == single.mz.size());
+        CHECK(std::equal(single.mz.begin(), single.mz.end(), batch.mz.begin() + static_cast<std::ptrdiff_t>(b)));
+        CHECK(std::equal(single.intensities.begin(), single.intensities.end(),
+            batch.intensities.begin() + static_cast<std::ptrdiff_t>(b)));
+        CHECK(batch.charge_offsets[i + 1] - batch.charge_offsets[i] == single.charges.size());
+    }
+
+    tb::ScanBatch reused = batch;
+    raw.read_scans(first + 1, first + 2, reused);
+    CHECK(reused.size() == 2);
+    CHECK(reused.peak_offsets.size() == 3);
+    CHECK(reused.headers[0].scan_number == first + 1);
+}
+
+TEST_CASE("read_scan and read_scans reject scans outside the run")
+{
+    TestFile tf;
+    auto& raw = *tf.file;
+    CHECK_THROWS_AS(raw.read_scan(raw.last_scan_number() + 1), tb::bridge_error);
+    CHECK_THROWS_AS(raw.read_scans(raw.first_scan_number(), raw.last_scan_number() + 1), tb::bridge_error);
+    CHECK_THROWS_AS(raw.read_scans(raw.first_scan_number() + 1, raw.first_scan_number()), tb::bridge_error);
+}
+
+TEST_CASE("trailer layout gives typed values matching the formatted trailers")
+{
+    TestFile tf;
+    auto& raw = *tf.file;
+    const auto& layout = raw.trailer_layout();
+    REQUIRE(!layout.labels.empty());
+    const int injection = layout.find("Ion Injection Time (ms):");
+    const int charge = layout.find("Charge State:");
+    const int agc = layout.find("AGC:");
+    const int resolution = layout.find("FT Resolution:");
+    REQUIRE(injection >= 0);
+    REQUIRE(charge >= 0);
+    REQUIRE(agc >= 0);
+    REQUIRE(resolution >= 0);
+    CHECK(layout.find("No such label:") == -1);
+    CHECK(layout.labels[static_cast<std::size_t>(injection)].kind == tb::TrailerKind::Double);
+    CHECK(layout.labels[static_cast<std::size_t>(charge)].kind == tb::TrailerKind::Int);
+    CHECK(layout.labels[static_cast<std::size_t>(agc)].kind == tb::TrailerKind::Bool);
+    CHECK(layout.double_count + layout.int_count + layout.bool_count + layout.string_count == layout.labels.size());
+
+    const int s = raw.first_scan_number();
+    tb::ReadOptions options;
+    options.trailer_text = true;
+    const auto header = raw.read_scan(s, options).header;
+    CHECK(header.trailer_doubles.size() == layout.double_count);
+    CHECK(header.trailer_ints.size() == layout.int_count);
+    CHECK(header.trailer_bools.size() == layout.bool_count);
+    CHECK(header.trailer_strings.size() == layout.string_count);
+    REQUIRE(header.trailer_text.size() == layout.labels.size());
+    CHECK(header.trailer_text[static_cast<std::size_t>(injection)] == raw.trailer_extra_value(s, "Ion Injection Time (ms):"));
+
+    const double injection_text = std::stod(raw.trailer_extra_value(s, "Ion Injection Time (ms):"));
+    CHECK_THAT(header.trailer_double(layout, injection), Catch::Matchers::WithinAbs(injection_text, 0.0006));
+    CHECK(header.trailer_int(layout, charge) == std::stoll(raw.trailer_extra_value(s, "Charge State:")));
+    CHECK(header.trailer_int(layout, resolution) == 17500);
+    CHECK(header.trailer_bool(layout, agc));
+    CHECK(header.trailer_as_double(layout, agc) == 1.0);
+    CHECK(header.trailer_as_double(layout, resolution) == 17500.0);
+    CHECK_THROWS_AS(header.trailer_int(layout, injection), std::out_of_range);
+    CHECK_THROWS_AS(header.trailer_double(layout, -1), std::out_of_range);
+
+    tb::ReadOptions no_trailers;
+    no_trailers.trailers = false;
+    const auto bare = raw.read_scan(s, no_trailers).header;
+    CHECK(bare.trailer_doubles.empty());
+    CHECK_THROWS_AS(bare.trailer_double(layout, injection), std::out_of_range);
+}
+
+TEST_CASE("set_trailer_selection limits which trailer values are read")
+{
+    TestFile tf;
+    auto& raw = *tf.file;
+    const int s = raw.first_scan_number();
+    const double full = raw.scan_header(s).trailer_double(raw.trailer_layout(), raw.trailer_layout().find("Ion Injection Time (ms):"));
+
+    raw.set_trailer_selection({"Ion Injection Time (ms):", "Charge State:", "Not present:"});
+    const auto& layout = raw.trailer_layout();
+    const int injection = layout.find("Ion Injection Time (ms):");
+    const int charge = layout.find("Charge State:");
+    const int temperature = layout.find("Analyzer Temperature:");
+    REQUIRE(temperature >= 0);
+    CHECK(layout.labels[static_cast<std::size_t>(injection)].selected);
+    CHECK(layout.labels[static_cast<std::size_t>(charge)].selected);
+    CHECK(!layout.labels[static_cast<std::size_t>(temperature)].selected);
+    const auto header = raw.scan_header(s);
+    CHECK(header.trailer_double(layout, injection) == full);
+    CHECK(std::isnan(header.trailer_double(layout, temperature)));
+
+    raw.set_trailer_selection({});
+    const auto& all = raw.trailer_layout();
+    CHECK(all.labels[static_cast<std::size_t>(temperature)].selected);
+    CHECK(!std::isnan(raw.scan_header(s).trailer_double(all, temperature)));
+}
+
+TEST_CASE("file_sha1 is computed on request only")
+{
+    TestFile tf;
+    CHECK(tf.file->file_sha1() == "3abd61dca288aa769fd0b9aeaeaf1bdf0cede430");
+    CHECK(tf.file->file_metadata_json(false).find("\"sha1\":null") != std::string::npos);
+}
+
+TEST_CASE("Enum name helpers match vendor names")
+{
+    CHECK(tb::ms_order_name(tb::MsOrder::Ms2) == "Ms2");
+    CHECK(tb::ms_order_name(tb::MsOrder::Par) == "Par");
+    CHECK(tb::ms_order_name(tb::MsOrder::Ng) == "Ng");
+    CHECK(tb::ms_order_name(static_cast<tb::MsOrder>(42)) == "42");
+    CHECK(tb::mass_analyzer_name(4) == "MassAnalyzerFTMS");
+    CHECK(tb::mass_analyzer_name(6) == "Any");
+    CHECK(tb::ionization_mode_name(3) == "ElectroSpray");
+    CHECK(tb::activation_type_name(5) == "HigherEnergyCollisionalDissociation");
+    CHECK(tb::activation_type_name(99) == "99");
+}
+
+TEST_CASE("Thread accessors read concurrently with identical results")
+{
+    TestFile tf;
+    auto& raw = *tf.file;
+    const int first = raw.first_scan_number();
+    const int last = raw.last_scan_number();
+    const auto sequential = raw.read_scans(first, last);
+
+    constexpr int kThreads = 4;
+    std::vector<tb::RawFile> accessors;
+    for (int t = 0; t < kThreads; ++t) accessors.push_back(raw.thread_accessor());
+    std::vector<tb::ScanBatch> results(kThreads);
+    std::vector<std::string> errors(kThreads);
+    std::vector<std::thread> threads;
+    for (int t = 0; t < kThreads; ++t)
+    {
+        threads.emplace_back([&, t] {
+            try
+            {
+                // Every thread reads the whole run, scan by scan, several times.
+                tb::Spectrum spectrum;
+                for (int round = 0; round < 3; ++round)
+                {
+                    results[t] = tb::ScanBatch{};
+                    for (int s = first; s <= last; ++s)
+                    {
+                        accessors[static_cast<std::size_t>(t)].read_scan(s, spectrum);
+                        results[t].headers.push_back(spectrum.header);
+                        results[t].peak_offsets.push_back(results[t].mz.size());
+                        results[t].mz.insert(results[t].mz.end(), spectrum.mz.begin(), spectrum.mz.end());
+                        results[t].intensities.insert(results[t].intensities.end(), spectrum.intensities.begin(),
+                            spectrum.intensities.end());
+                    }
+                    results[t].peak_offsets.push_back(results[t].mz.size());
+                }
+            }
+            catch (const std::exception& e) { errors[static_cast<std::size_t>(t)] = e.what(); }
+        });
+    }
+    for (auto& th : threads) th.join();
+    for (int t = 0; t < kThreads; ++t)
+    {
+        INFO("thread " << t);
+        CHECK(errors[static_cast<std::size_t>(t)].empty());
+        const auto& r = results[static_cast<std::size_t>(t)];
+        CHECK(r.mz == sequential.mz);
+        CHECK(r.intensities == sequential.intensities);
+        CHECK(r.peak_offsets == sequential.peak_offsets);
+        REQUIRE(r.headers.size() == sequential.headers.size());
+        for (std::size_t i = 0; i < r.headers.size(); ++i)
+        {
+            CHECK(r.headers[i].filter == sequential.headers[i].filter);
+            CHECK(r.headers[i].trailer_doubles == sequential.headers[i].trailer_doubles);
+            CHECK(r.headers[i].trailer_ints == sequential.headers[i].trailer_ints);
+        }
+    }
+}
+
+TEST_CASE("Thread accessor stays valid after its source is closed")
+{
+    TestFile tf;
+    tb::RawFile accessor = tf.file->thread_accessor();
+    const int s = tf.file->first_scan_number();
+    const auto expected = tf.file->read_scan(s);
+    tf.file.reset();
+    const auto spectrum = accessor.read_scan(s);
+    CHECK(spectrum.mz == expected.mz);
+    CHECK(accessor.scan_count() == OPENMS_THERMO_BRIDGE_TEST_EXPECTED_SCAN_COUNT);
+}
+
+namespace
+{
+// Noise triplets must be complete or empty, and noise_offsets must index all three arrays.
+void check_batch_noise(const tb::RawFile& raw)
+{
+    const int first = raw.first_scan_number();
+    const int last = raw.last_scan_number();
+    tb::ReadOptions options;
+    options.trailers = false;
+    options.noise = true;
+    const auto batch = raw.read_scans(first, last, options);
+    REQUIRE(batch.noise_offsets.size() == batch.size() + 1);
+    CHECK(batch.noise_offsets.back() == batch.noise_mz.size());
+    CHECK(batch.noise_intensities.size() == batch.noise_mz.size());
+    CHECK(batch.noise_baselines.size() == batch.noise_mz.size());
+    for (std::size_t i = 0; i < batch.size(); ++i)
+    {
+        const auto single = raw.read_scan(first + static_cast<int>(i), options);
+        CHECK(single.noise_intensities.size() == single.noise_mz.size());
+        CHECK(single.noise_baselines.size() == single.noise_mz.size());
+        const auto b = batch.noise_offsets[i];
+        REQUIRE(batch.noise_offsets[i + 1] - b == single.noise_mz.size());
+        CHECK(std::equal(single.noise_mz.begin(), single.noise_mz.end(),
+            batch.noise_mz.begin() + static_cast<std::ptrdiff_t>(b)));
+        CHECK(std::equal(single.noise_intensities.begin(), single.noise_intensities.end(),
+            batch.noise_intensities.begin() + static_cast<std::ptrdiff_t>(b)));
+        CHECK(std::equal(single.noise_baselines.begin(), single.noise_baselines.end(),
+            batch.noise_baselines.begin() + static_cast<std::ptrdiff_t>(b)));
+    }
+}
+} // namespace
+
+TEST_CASE("read_scans noise arrays stay aligned with noise_offsets")
+{
+    TestFile tf;
+    check_batch_noise(*tf.file);
+}
+
+TEST_CASE("read_scans noise arrays stay aligned for scans without a centroid stream")
+{
+    // Optional LTQ fixture, e.g. ThermoRawFileParserTest/Data/small.RAW: it mixes
+    // FTMS scans with noise data and ITMS scans without.
+    const char* path = std::getenv("OPENMS_THERMO_BRIDGE_TEST_MSN_RAW");
+    if (!path || !*path) SKIP("Set OPENMS_THERMO_BRIDGE_TEST_MSN_RAW to an LTQ MSn RAW fixture");
+    tb::RawFile raw(path);
+    check_batch_noise(raw);
+    bool without_noise = false;
+    for (int scan = raw.first_scan_number(); scan <= raw.last_scan_number() && !without_noise; ++scan)
+    {
+        tb::ReadOptions options;
+        options.noise = true;
+        without_noise = raw.read_scan(scan, options).noise_mz.empty();
+    }
+    CHECK(without_noise);
 }
