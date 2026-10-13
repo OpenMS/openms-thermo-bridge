@@ -244,7 +244,12 @@ if(BUILD_TESTING)
       Catch2
       GIT_REPOSITORY https://github.com/catchorg/Catch2.git
       GIT_TAG v3.8.1)
+    # Keep Catch2 static in shared-library builds: a shared Catch2 is not placed
+    # next to the test executables (breaking catch_discover_tests on Windows).
+    set(_openms_thermo_bridge_shared_libs "${BUILD_SHARED_LIBS}")
+    set(BUILD_SHARED_LIBS OFF)
     FetchContent_MakeAvailable(Catch2)
+    set(BUILD_SHARED_LIBS "${_openms_thermo_bridge_shared_libs}")
   endif()
 
   file(MAKE_DIRECTORY "${OPENMS_THERMO_BRIDGE_TEST_DATA_DIR}")
