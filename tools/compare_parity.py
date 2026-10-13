@@ -8,12 +8,14 @@ scan_metadata_json, spectrum_data(centroid / profile) digests and
 spectrum_auxiliary_array(0..3) digests. Peaks must match bit-exactly
 (new output is m/z-sorted, so it is compared with the baseline's sorted digest).
 Typed trailers are compared with the vendor-formatted baseline strings within
-the formatting precision.
+the formatting precision. Since 1.0 a scan without noise data (no centroid stream)
+reports an empty noise triplet, where v0.3.1 returned the segmented masses as aux1.
 """
 import json
 import math
 import sys
 from collections import Counter
+from itertools import zip_longest
 
 HEADER_KEYS = ["scan_number", "controller_type", "controller_number", "native_id", "retention_time", "ms_level",
                "ms_order_name", "centroid", "polarity", "filter", "analyzer", "ionization", "low_mass", "high_mass",
@@ -77,7 +79,10 @@ def main(baseline_path, new_path):
             fail("tic", (new_file["tic"], base_file["tic"]))
 
         scans = 0
-        for base_line, new_line in zip(bf, nf):
+        for base_line, new_line in zip_longest(bf, nf):
+            if base_line is None or new_line is None:
+                fail("scan_count", "new dump has extra scans" if base_line is None else "new dump is missing scans")
+                break
             b = json.loads(base_line)
             n = json.loads(new_line)
             s = b["scan"]
@@ -95,8 +100,11 @@ def main(baseline_path, new_path):
                     fail(key + "_peaks", s)
             if (n["aux_c"]["n"], n["aux_c"]["h"]) != (b["c"]["n"], b["c"]["hs"]):
                 fail("noise_path_peaks", s)
+            expected_aux = dict(b)
+            if b["aux2"]["n"] == 0 and b["aux3"]["n"] == 0:
+                expected_aux["aux1"] = b["aux2"]
             for key in ("aux0", "aux1", "aux2", "aux3"):
-                if n[key] != b[key]:
+                if n[key] != expected_aux[key]:
                     fail(key, (s, n[key], b[key]))
 
             h = n["header"]
@@ -127,8 +135,10 @@ def main(baseline_path, new_path):
                 if not typed_matches(layout[i]["kind"], n["trailers"][i], t["value"]):
                     fail("trailer." + t["label"], (s, n["trailers"][i], t["value"]))
 
-        if bf.readline() or nf.readline():
-            fail("scan_count", "files differ in length")
+        run = base_meta["run"]
+        declared = run["last_scan"] - run["first_scan"] + 1 if run.get("scan_count") else 0
+        if scans != declared:
+            fail("scan_count", f"{scans} scans compared, {declared} declared")
 
     print(f"{new_path}: {scans} scans compared")
     if not problems:

@@ -17,6 +17,11 @@ jobs:
           - ubuntu-latest
           - macos-latest
           - windows-latest
+        # Shared builds use hidden visibility: they check the exported API, and the
+        # bench is an external consumer of it.
+        shared:
+          - OFF
+          - ON
 
     steps:
       - name: Check out repository
@@ -46,7 +51,9 @@ jobs:
         run: |
           cmake -S "${GITHUB_WORKSPACE}" -B "${GITHUB_WORKSPACE}/build" \
             -DOPENMS_THERMO_BRIDGE_ENABLE_VENDOR_DOWNLOAD=ON \
-            -DOPENMS_THERMO_BRIDGE_DOWNLOAD_TEST_DATA=ON
+            -DOPENMS_THERMO_BRIDGE_DOWNLOAD_TEST_DATA=ON \
+            -DBUILD_SHARED_LIBS=${{ matrix.shared }} \
+            -DOPENMS_THERMO_BRIDGE_BUILD_BENCH=${{ matrix.shared }}
 
       - name: Build
         shell: bash

@@ -340,6 +340,13 @@ namespace ThermoWrapperManaged
             noiseMz = scan.PreferredMasses;
             noises = scan.PreferredNoises;
             baselines = scan.PreferredBaselines;
+            // Without a centroid stream PreferredMasses are the segmented masses and the
+            // noise arrays are empty: report a complete triplet or nothing.
+            int n = noiseMz?.Length ?? 0;
+            if (n == 0 || noises == null || baselines == null || noises.Length != n || baselines.Length != n)
+            {
+                noiseMz = null; noises = null; baselines = null;
+            }
         }
 
         /// Guarantees ascending m/z; vendor arrays are only copied when out of order.

@@ -1107,3 +1107,59 @@ TEST_CASE("Thread accessor stays valid after its source is closed")
     CHECK(spectrum.mz == expected.mz);
     CHECK(accessor.scan_count() == OPENMS_THERMO_BRIDGE_TEST_EXPECTED_SCAN_COUNT);
 }
+
+namespace
+{
+// Noise triplets must be complete or empty, and noise_offsets must index all three arrays.
+void check_batch_noise(const tb::RawFile& raw)
+{
+    const int first = raw.first_scan_number();
+    const int last = raw.last_scan_number();
+    tb::ReadOptions options;
+    options.trailers = false;
+    options.noise = true;
+    const auto batch = raw.read_scans(first, last, options);
+    REQUIRE(batch.noise_offsets.size() == batch.size() + 1);
+    CHECK(batch.noise_offsets.back() == batch.noise_mz.size());
+    CHECK(batch.noise_intensities.size() == batch.noise_mz.size());
+    CHECK(batch.noise_baselines.size() == batch.noise_mz.size());
+    for (std::size_t i = 0; i < batch.size(); ++i)
+    {
+        const auto single = raw.read_scan(first + static_cast<int>(i), options);
+        CHECK(single.noise_intensities.size() == single.noise_mz.size());
+        CHECK(single.noise_baselines.size() == single.noise_mz.size());
+        const auto b = batch.noise_offsets[i];
+        REQUIRE(batch.noise_offsets[i + 1] - b == single.noise_mz.size());
+        CHECK(std::equal(single.noise_mz.begin(), single.noise_mz.end(),
+            batch.noise_mz.begin() + static_cast<std::ptrdiff_t>(b)));
+        CHECK(std::equal(single.noise_intensities.begin(), single.noise_intensities.end(),
+            batch.noise_intensities.begin() + static_cast<std::ptrdiff_t>(b)));
+        CHECK(std::equal(single.noise_baselines.begin(), single.noise_baselines.end(),
+            batch.noise_baselines.begin() + static_cast<std::ptrdiff_t>(b)));
+    }
+}
+} // namespace
+
+TEST_CASE("read_scans noise arrays stay aligned with noise_offsets")
+{
+    TestFile tf;
+    check_batch_noise(*tf.file);
+}
+
+TEST_CASE("read_scans noise arrays stay aligned for scans without a centroid stream")
+{
+    // Optional LTQ fixture, e.g. ThermoRawFileParserTest/Data/small.RAW: it mixes
+    // FTMS scans with noise data and ITMS scans without.
+    const char* path = std::getenv("OPENMS_THERMO_BRIDGE_TEST_MSN_RAW");
+    if (!path || !*path) SKIP("Set OPENMS_THERMO_BRIDGE_TEST_MSN_RAW to an LTQ MSn RAW fixture");
+    tb::RawFile raw(path);
+    check_batch_noise(raw);
+    bool without_noise = false;
+    for (int scan = raw.first_scan_number(); scan <= raw.last_scan_number() && !without_noise; ++scan)
+    {
+        tb::ReadOptions options;
+        options.noise = true;
+        without_noise = raw.read_scan(scan, options).noise_mz.empty();
+    }
+    CHECK(without_noise);
+}

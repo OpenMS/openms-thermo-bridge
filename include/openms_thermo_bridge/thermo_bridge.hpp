@@ -169,12 +169,12 @@ struct ScanHeader
 
     // Typed lookups by TrailerLayout label index; throw std::out_of_range on kind mismatch
     // or when trailer values were not read.
-    double trailer_double(const TrailerLayout& layout, int label_index) const;
-    std::int64_t trailer_int(const TrailerLayout& layout, int label_index) const;
-    bool trailer_bool(const TrailerLayout& layout, int label_index) const;
-    const std::string& trailer_string(const TrailerLayout& layout, int label_index) const;
+    OPENMS_THERMO_BRIDGE_EXPORT double trailer_double(const TrailerLayout& layout, int label_index) const;
+    OPENMS_THERMO_BRIDGE_EXPORT std::int64_t trailer_int(const TrailerLayout& layout, int label_index) const;
+    OPENMS_THERMO_BRIDGE_EXPORT bool trailer_bool(const TrailerLayout& layout, int label_index) const;
+    OPENMS_THERMO_BRIDGE_EXPORT const std::string& trailer_string(const TrailerLayout& layout, int label_index) const;
     /// Any kind converted to double (bool -> 0/1, string parsed, NaN if unparsable).
-    double trailer_as_double(const TrailerLayout& layout, int label_index) const;
+    OPENMS_THERMO_BRIDGE_EXPORT double trailer_as_double(const TrailerLayout& layout, int label_index) const;
 };
 
 /// What read_scan / read_scans fetch. Every scan is decoded at most once.
@@ -195,13 +195,16 @@ struct Spectrum
     std::vector<double> mz;
     std::vector<double> intensities;
     std::vector<double> charges;         ///< empty, or same length as mz
-    std::vector<double> noise_mz;        ///< own grid, see docs/metadata.md
+    /// Noise triplet on its own grid (see docs/metadata.md): all three have the same
+    /// length, or all are empty (no noise data, e.g. scans without a centroid stream).
+    std::vector<double> noise_mz;
     std::vector<double> noise_intensities;
     std::vector<double> noise_baselines;
 };
 
 /// Packed result of read_scans: scan i owns mz[peak_offsets[i] .. peak_offsets[i+1]).
-/// All *_offsets arrays have headers.size() + 1 entries.
+/// All *_offsets arrays have headers.size() + 1 entries; noise_offsets index
+/// noise_mz, noise_intensities and noise_baselines alike.
 struct ScanBatch
 {
     std::vector<ScanHeader> headers;

@@ -55,7 +55,11 @@ its position array contains wavelength, not m/z.
 
 Only attach charges when they match the native centroid peak stream. Noise
 arrays have their own mass grid and length; they are not peak annotations.
-Missing optional arrays are empty. Invalid handles, scan numbers, or array
+Missing optional arrays are empty. With `ReadOptions::noise`, `read_scan` and
+`read_scans` return the noise m/z, intensity and baseline arrays together (same
+length, sharing `ScanBatch::noise_offsets`) or not at all; scans without a
+centroid stream have no noise data. The legacy `spectrum_auxiliary_array(scan, 1)`
+still returns the vendor's preferred masses for such scans. Invalid handles, scan numbers, or array
 kinds throw `bridge_error`; string-query failures also throw instead of
 appearing to be empty metadata. These additions are ABI-additive. The polarity
 CV helper now follows the actual vendor enum: 0 negative, 1 positive, 2 unknown.
