@@ -847,62 +847,6 @@ std::string mass_analyzer_name(int analyzer) { return enum_name(kAnalyzerNames, 
 std::string ionization_mode_name(int ionization) { return enum_name(kIonizationNames, ionization); }
 std::string activation_type_name(int activation) { return enum_name(kActivationNames, activation); }
 
-namespace
-{
-template <typename T>
-const T& trailer_slot(const TrailerLayout& layout, int label_index, TrailerKind kind, const std::vector<T>& values)
-{
-    if (label_index < 0 || static_cast<std::size_t>(label_index) >= layout.labels.size())
-        throw std::out_of_range("trailer label index out of range");
-    const auto& label = layout.labels[static_cast<std::size_t>(label_index)];
-    if (label.kind != kind) throw std::out_of_range("trailer '" + label.label + "' has a different kind");
-    if (label.slot < 0 || static_cast<std::size_t>(label.slot) >= values.size())
-        throw std::out_of_range("trailer '" + label.label + "' was not read");
-    return values[static_cast<std::size_t>(label.slot)];
-}
-} // namespace
-
-double ScanHeader::trailer_double(const TrailerLayout& layout, int label_index) const
-{
-    return trailer_slot(layout, label_index, TrailerKind::Double, trailer_doubles);
-}
-
-std::int64_t ScanHeader::trailer_int(const TrailerLayout& layout, int label_index) const
-{
-    return trailer_slot(layout, label_index, TrailerKind::Int, trailer_ints);
-}
-
-bool ScanHeader::trailer_bool(const TrailerLayout& layout, int label_index) const
-{
-    return trailer_slot(layout, label_index, TrailerKind::Bool, trailer_bools) != 0;
-}
-
-const std::string& ScanHeader::trailer_string(const TrailerLayout& layout, int label_index) const
-{
-    return trailer_slot(layout, label_index, TrailerKind::String, trailer_strings);
-}
-
-double ScanHeader::trailer_as_double(const TrailerLayout& layout, int label_index) const
-{
-    if (label_index < 0 || static_cast<std::size_t>(label_index) >= layout.labels.size())
-        throw std::out_of_range("trailer label index out of range");
-    switch (layout.labels[static_cast<std::size_t>(label_index)].kind)
-    {
-    case TrailerKind::Double: return trailer_double(layout, label_index);
-    case TrailerKind::Int: return static_cast<double>(trailer_int(layout, label_index));
-    case TrailerKind::Bool: return trailer_bool(layout, label_index) ? 1.0 : 0.0;
-    default:
-    {
-        const std::string& text = trailer_string(layout, label_index);
-        const char* begin = text.c_str();
-        char* end = nullptr;
-        const double value = std::strtod(begin, &end);
-        if (end == begin) return std::numeric_limits<double>::quiet_NaN();
-        return value;
-    }
-    }
-}
-
 std::filesystem::path default_managed_directory()
 {
     std::vector<std::filesystem::path> candidates;

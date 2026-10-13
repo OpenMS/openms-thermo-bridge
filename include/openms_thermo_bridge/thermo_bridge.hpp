@@ -5,7 +5,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -168,13 +170,59 @@ struct ScanHeader
     }
 
     // Typed lookups by TrailerLayout label index; throw std::out_of_range on kind mismatch
-    // or when trailer values were not read.
-    OPENMS_THERMO_BRIDGE_EXPORT double trailer_double(const TrailerLayout& layout, int label_index) const;
-    OPENMS_THERMO_BRIDGE_EXPORT std::int64_t trailer_int(const TrailerLayout& layout, int label_index) const;
-    OPENMS_THERMO_BRIDGE_EXPORT bool trailer_bool(const TrailerLayout& layout, int label_index) const;
-    OPENMS_THERMO_BRIDGE_EXPORT const std::string& trailer_string(const TrailerLayout& layout, int label_index) const;
+    // or when trailer values were not read. Defined inline so the exception is thrown
+    // in the caller's image (no cross-library RTTI for std exceptions).
+    double trailer_double(const TrailerLayout& layout, int label_index) const
+    {
+        return trailer_slot(layout, label_index, TrailerKind::Double, trailer_doubles);
+    }
+    std::int64_t trailer_int(const TrailerLayout& layout, int label_index) const
+    {
+        return trailer_slot(layout, label_index, TrailerKind::Int, trailer_ints);
+    }
+    bool trailer_bool(const TrailerLayout& layout, int label_index) const
+    {
+        return trailer_slot(layout, label_index, TrailerKind::Bool, trailer_bools) != 0;
+    }
+    const std::string& trailer_string(const TrailerLayout& layout, int label_index) const
+    {
+        return trailer_slot(layout, label_index, TrailerKind::String, trailer_strings);
+    }
     /// Any kind converted to double (bool -> 0/1, string parsed, NaN if unparsable).
-    OPENMS_THERMO_BRIDGE_EXPORT double trailer_as_double(const TrailerLayout& layout, int label_index) const;
+    double trailer_as_double(const TrailerLayout& layout, int label_index) const
+    {
+        switch (trailer_label(layout, label_index).kind)
+        {
+        case TrailerKind::Double: return trailer_double(layout, label_index);
+        case TrailerKind::Int: return static_cast<double>(trailer_int(layout, label_index));
+        case TrailerKind::Bool: return trailer_bool(layout, label_index) ? 1.0 : 0.0;
+        default:
+        {
+            const std::string& text = trailer_string(layout, label_index);
+            const char* begin = text.c_str();
+            char* end = nullptr;
+            const double value = std::strtod(begin, &end);
+            return end == begin ? std::numeric_limits<double>::quiet_NaN() : value;
+        }
+        }
+    }
+
+private:
+    static const TrailerLabel& trailer_label(const TrailerLayout& layout, int label_index)
+    {
+        if (label_index < 0 || static_cast<std::size_t>(label_index) >= layout.labels.size())
+            throw std::out_of_range("trailer label index out of range");
+        return layout.labels[static_cast<std::size_t>(label_index)];
+    }
+    template <typename T>
+    static const T& trailer_slot(const TrailerLayout& layout, int label_index, TrailerKind kind, const std::vector<T>& values)
+    {
+        const TrailerLabel& label = trailer_label(layout, label_index);
+        if (label.kind != kind) throw std::out_of_range("trailer '" + label.label + "' has a different kind");
+        if (label.slot < 0 || static_cast<std::size_t>(label.slot) >= values.size())
+            throw std::out_of_range("trailer '" + label.label + "' was not read");
+        return values[static_cast<std::size_t>(label.slot)];
+    }
 };
 
 /// What read_scan / read_scans fetch. Every scan is decoded at most once.
