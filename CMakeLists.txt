@@ -64,6 +64,8 @@ if(OPENMS_THERMO_BRIDGE_DOWNLOAD_PREBUILT_MANAGED AND NOT OPENMS_THERMO_BRIDGE_P
     else()
       set(_openms_thermo_bridge_prebuilt_platform "osx-x64")
     endif()
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
+    set(_openms_thermo_bridge_prebuilt_platform "linux-arm64")
   else()
     set(_openms_thermo_bridge_prebuilt_platform "linux-x64")
   endif()

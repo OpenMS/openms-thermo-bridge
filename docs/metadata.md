@@ -70,10 +70,10 @@ The full sample and method snapshots can contain instrument paths and user
 entered text; callers can omit methods with the API flag. The SHA-1 is only
 computed by `file_sha1()`.
 
-Build the managed and native components from the same revision. Until a 1.0.0
-release artifact is published, use the .NET 8 SDK source build or supply a
-matching `OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR`; old managed DLLs do not
-contain the new entry points.
+Build the managed and native components from the same revision: use the .NET 8
+SDK source build or the release zip of the same version (linux-x64,
+linux-arm64, osx-arm64, win-x64) as `OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR`;
+managed DLLs of 0.x releases do not contain the 1.0 entry points.
 
 ## Low-resolution spectrum regression test
 

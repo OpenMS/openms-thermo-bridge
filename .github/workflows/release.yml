@@ -4,27 +4,69 @@ on:
   push:
     tags:
       - 'v*'
+  # Add managed zips for further platforms to an existing release. Only the listed
+  # platforms are built: rebuilding a published zip would change its SHA-256, which
+  # consumers (e.g. OpenMS tools/ci/fetch_thermo_assets.sh) pin.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag, e.g. v1.0.0
+        required: true
+        type: string
+      platforms:
+        description: Space-separated platforms to build and add
+        required: true
+        default: linux-arm64
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 permissions:
   contents: write
 
 jobs:
+  select-platforms:
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.select.outputs.include }}
+    steps:
+      - name: Select platforms
+        id: select
+        shell: bash
+        env:
+          REQUESTED: ${{ inputs.platforms }}
+        run: |
+          all='[{"os":"ubuntu-latest","platform":"linux-x64"},
+                {"os":"ubuntu-24.04-arm","platform":"linux-arm64"},
+                {"os":"windows-latest","platform":"win-x64"},
+                {"os":"macos-latest","platform":"osx-arm64"}]'
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            wanted="$(jq -cn --arg p "$REQUESTED" '$p | split(" ") | map(select(length > 0))')"
+            include="$(jq -c --argjson w "$wanted" 'map(select(.platform as $p | $w | index($p)))' <<<"$all")"
+            unknown="$(jq -r --argjson a "$all" 'map(select(. as $p | $a | map(.platform) | index($p) | not)) | join(" ")' <<<"$wanted")"
+            if [[ -n "$unknown" || "$include" == "[]" ]]; then
+              echo "::error::unknown or no platforms: '$REQUESTED'"
+              exit 1
+            fi
+          else
+            include="$(jq -c . <<<"$all")"
+          fi
+          echo "include=$include" >> "$GITHUB_OUTPUT"
+
   build-managed:
+    needs: select-platforms
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            platform: linux-x64
-          - os: windows-latest
-            platform: win-x64
-          - os: macos-latest
-            platform: osx-arm64
+        include: ${{ fromJSON(needs.select-platforms.outputs.include) }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Set up .NET 8 SDK
         uses: actions/setup-dotnet@v4
@@ -46,7 +88,7 @@ jobs:
         shell: bash
         run: |
           cd "${{ github.workspace }}/build/openms_thermo_bridge_managed"
-          zip -r "${{ github.workspace }}/openms-thermo-bridge-managed-${{ matrix.platform }}-${{ github.ref_name }}.zip" .
+          zip -r "${{ github.workspace }}/openms-thermo-bridge-managed-${{ matrix.platform }}-${{ env.RELEASE_TAG }}.zip" .
 
       - name: Zip managed output (Windows)
         if: runner.os == 'Windows'
@@ -54,13 +96,13 @@ jobs:
         run: |
           Compress-Archive `
             -Path "${{ github.workspace }}\build\openms_thermo_bridge_managed\*" `
-            -DestinationPath "${{ github.workspace }}\openms-thermo-bridge-managed-${{ matrix.platform }}-${{ github.ref_name }}.zip"
+            -DestinationPath "${{ github.workspace }}\openms-thermo-bridge-managed-${{ matrix.platform }}-${{ env.RELEASE_TAG }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: managed-${{ matrix.platform }}
-          path: openms-thermo-bridge-managed-${{ matrix.platform }}-${{ github.ref_name }}.zip
+          path: openms-thermo-bridge-managed-${{ matrix.platform }}-${{ env.RELEASE_TAG }}.zip
 
   publish-release:
     needs: build-managed
@@ -75,4 +117,5 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: artifacts/*.zip
