@@ -82,3 +82,33 @@ jobs:
       - name: Install package
         shell: bash
         run: cmake --install "${GITHUB_WORKSPACE}/build" --config Release --prefix "${GITHUB_WORKSPACE}/install"
+
+      # The installed executable must find the shared bridge (RPATH, or next to it on Windows),
+      # nethost.dll on Windows, and <libdir>/openms_thermo_bridge/managed on its own.
+      - name: Run installed thermo_host
+        shell: bash
+        run: |
+          output="$("${GITHUB_WORKSPACE}/install/bin/thermo_host" "${GITHUB_WORKSPACE}/build/testdata/ginkgotoxin-ms-positive.raw")"
+          echo "${output}"
+          [[ "${output}" == *"Scan count: 90"* ]]
+
+      # Without nuget.org as a source, every package must come from the vendor feed. An empty
+      # NUGET_PACKAGES keeps the packages restored by the build above out of it.
+      - name: Build with OPENMS_THERMO_BRIDGE_NUGET_OFFLINE
+        if: matrix.shared == 'OFF'
+        shell: bash
+        run: |
+          feed="${RUNNER_TEMP}/offline-feed"
+          mkdir -p "${feed}"
+          global_packages="$(dotnet nuget locals global-packages --list | tr -d '\r' | sed -n 's/^global-packages: //p')"
+          find "${global_packages}" -name '*.nupkg' -exec cp {} "${feed}" \;
+          export NUGET_PACKAGES="${RUNNER_TEMP}/offline-nuget-packages"
+          cmake -S "${GITHUB_WORKSPACE}" -B "${GITHUB_WORKSPACE}/build-offline" \
+            -DOPENMS_THERMO_BRIDGE_NUGET_OFFLINE=ON \
+            -DOPENMS_THERMO_BRIDGE_VENDOR_DIR="${feed}" \
+            -DBUILD_TESTING=OFF
+          if grep -q nuget.org "${GITHUB_WORKSPACE}/build-offline/OpenMSThermoBridge.NuGet.config"; then
+            echo "nuget.org is still a package source" >&2
+            exit 1
+          fi
+          cmake --build "${GITHUB_WORKSPACE}/build-offline" --config Release --parallel
