@@ -847,37 +847,49 @@ std::string mass_analyzer_name(int analyzer) { return enum_name(kAnalyzerNames, 
 std::string ionization_mode_name(int ionization) { return enum_name(kIonizationNames, ionization); }
 std::string activation_type_name(int activation) { return enum_name(kActivationNames, activation); }
 
+// <libdir>/openms_thermo_bridge/managed relative to <bindir>. CMake sets it from the install
+// dirs; the default matches the standard bin/ and lib/ layout.
+#ifndef OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED
+#define OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED "../lib/openms_thermo_bridge/managed"
+#endif
+
 std::filesystem::path default_managed_directory()
 {
     std::vector<std::filesystem::path> candidates;
+    const auto add = [&candidates](const std::filesystem::path& candidate)
+    {
+        auto normal = candidate.lexically_normal();
+        if (std::find(candidates.begin(), candidates.end(), normal) == candidates.end())
+            candidates.push_back(std::move(normal));
+    };
+
     const auto exe_dir = executable_path().parent_path();
-    candidates.push_back(exe_dir / "managed");
+    add(exe_dir / "managed");
 
-    // Installed layout: the managed files live in <libdir>/openms_thermo_bridge/managed,
-    // while executables (and the bridge DLL on Windows) live in <bindir>. Set by CMake.
+    // Installed layout: the managed files live in <libdir>/openms_thermo_bridge/managed, while
+    // executables (and the bridge DLL on Windows) live in <bindir>. Paths relative to the
+    // bridge binary come first, so a program that loads the bridge from another installation
+    // (e.g. Python) does not pick up managed files next to its own executable.
     const std::filesystem::path bindir_to_managed(OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED);
-
     std::filesystem::path module;
-    const bool have_module = try_module_path(module);
-    if (have_module)
+    if (try_module_path(module))
     {
         const auto module_dir = module.parent_path();
-        candidates.push_back(module_dir / "managed");
-        candidates.push_back(module_dir / "openms_thermo_bridge" / "managed");
+        add(module_dir / "managed");
+        add(module_dir / "openms_thermo_bridge" / "managed");
+        add(module_dir / bindir_to_managed);
     }
-    candidates.push_back((exe_dir / bindir_to_managed).lexically_normal());
-    if (have_module)
-    {
-        candidates.push_back((module.parent_path() / bindir_to_managed).lexically_normal());
-    }
+    add(exe_dir / bindir_to_managed);
 #ifdef OPENMS_THERMO_BRIDGE_ABSOLUTE_MANAGED_DIR
-    candidates.push_back(std::filesystem::path(OPENMS_THERMO_BRIDGE_ABSOLUTE_MANAGED_DIR));
+    add(OPENMS_THERMO_BRIDGE_ABSOLUTE_MANAGED_DIR);
 #endif
 
     for (const auto& candidate : candidates)
     {
-        if (std::filesystem::exists(candidate / "ThermoWrapperManaged.runtimeconfig.json")
-            && std::filesystem::exists(candidate / "ThermoWrapperManaged.dll"))
+        // Non-throwing overloads: a directory we cannot read is simply not a match.
+        std::error_code ec;
+        if (std::filesystem::exists(candidate / "ThermoWrapperManaged.runtimeconfig.json", ec)
+            && std::filesystem::exists(candidate / "ThermoWrapperManaged.dll", ec))
         {
             return candidate;
         }

@@ -18,7 +18,7 @@ The project does **not** download the Thermo vendor packages by default.
 
 ### Option 1: provide the vendor `.nupkg` files yourself
 Place the following files in `vendor/thermo-feed` or point CMake at another directory with `-DOPENMS_THERMO_BRIDGE_VENDOR_DIR=/absolute/path`.
-The names are lower case, as in the RawFileReader repository (`Libs/NetCore/Net8`), and the version follows `OPENMS_THERMO_BRIDGE_THERMO_VERSION`:
+The names are lower case, as in the RawFileReader repository (`Libs/NetCore/Net8`), and the version is the one the `PackageReference` entries in `ThermoWrapperManaged.csproj` request:
 - `thermofisher.commoncore.backgroundsubtraction.8.0.37.nupkg`
 - `thermofisher.commoncore.data.8.0.37.nupkg`
 - `thermofisher.commoncore.massprecisionestimator.8.0.37.nupkg`
@@ -153,7 +153,7 @@ target_link_libraries(my_tool PRIVATE OpenMSThermoBridge::openms_thermo_bridge)
 openms_thermo_bridge_copy_runtime_files(TARGET my_tool)
 ```
 
-At runtime the bridge first looks for `managed/` next to the executable, then next to the loaded `openms_thermo_bridge` binary, and also supports the installed package layout: `openms_thermo_bridge/managed` next to the library, and `<libdir>/openms_thermo_bridge/managed` relative to the executable's (or, on Windows, the DLL's) `bin` directory, so installed executables such as `thermo_host` work with a static bridge too. That means:
+At runtime the bridge first looks for `managed/` next to the executable, then next to the loaded `openms_thermo_bridge` binary, and also supports the installed package layout: `openms_thermo_bridge/managed` next to the library, and `<libdir>/openms_thermo_bridge/managed` relative to the `bin` directory of the bridge DLL (Windows) or of the executable, so installed executables such as `thermo_host` work with a static bridge too. That means:
 - build-tree consumers can stage runtime files next to their executable or shared library with `openms_thermo_bridge_copy_runtime_files()`
 - installed-package consumers can either stage the runtime files the same way or rely on the package's installed `lib/openms_thermo_bridge/managed` layout
 

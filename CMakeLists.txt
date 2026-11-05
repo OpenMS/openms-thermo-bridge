@@ -234,17 +234,28 @@ add_dependencies(openms_thermo_bridge openms_thermo_bridge_managed)
 # Install location of the managed files. The bridge also searches it relative to the
 # bin directory, so an installed executable with the static bridge (or the bridge DLL
 # on Windows, which installs to bin) finds it.
-set(OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR "${CMAKE_INSTALL_LIBDIR}/openms_thermo_bridge/managed")
+file(TO_CMAKE_PATH "${CMAKE_INSTALL_LIBDIR}/openms_thermo_bridge/managed" OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR)
+# The prefix and the install dirs may each be relative or absolute; only the bin-to-managed
+# relation matters, so resolve both against the same (absolute) prefix first.
+file(TO_CMAKE_PATH "${CMAKE_INSTALL_PREFIX}" _openms_thermo_bridge_prefix)
+file(TO_CMAKE_PATH "${CMAKE_INSTALL_BINDIR}" _openms_thermo_bridge_bindir)
+cmake_path(ABSOLUTE_PATH _openms_thermo_bridge_prefix BASE_DIRECTORY "${CMAKE_BINARY_DIR}" NORMALIZE)
+cmake_path(ABSOLUTE_PATH _openms_thermo_bridge_bindir BASE_DIRECTORY "${_openms_thermo_bridge_prefix}" NORMALIZE)
+cmake_path(ABSOLUTE_PATH OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR BASE_DIRECTORY "${_openms_thermo_bridge_prefix}"
+  NORMALIZE OUTPUT_VARIABLE _openms_thermo_bridge_full_managed_dir)
 file(RELATIVE_PATH OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED
-  "${CMAKE_INSTALL_FULL_BINDIR}"
-  "${CMAKE_INSTALL_FULL_LIBDIR}/openms_thermo_bridge/managed")
+  "${_openms_thermo_bridge_bindir}" "${_openms_thermo_bridge_full_managed_dir}")
 target_compile_definitions(openms_thermo_bridge PRIVATE
   OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED="${OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED}")
-# An absolute libdir does not move with `cmake --install --prefix`, so search it as is too.
 if(IS_ABSOLUTE "${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}")
-  file(TO_CMAKE_PATH "${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}" _openms_thermo_bridge_absolute_managed_dir)
+  # Package managers such as Nix pass an absolute CMAKE_INSTALL_LIBDIR. It does not move with
+  # `cmake --install --prefix`, so the bridge searches it as is too, and the package config
+  # uses it directly.
   target_compile_definitions(openms_thermo_bridge PRIVATE
-    OPENMS_THERMO_BRIDGE_ABSOLUTE_MANAGED_DIR="${_openms_thermo_bridge_absolute_managed_dir}")
+    OPENMS_THERMO_BRIDGE_ABSOLUTE_MANAGED_DIR="${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}")
+  set(OPENMS_THERMO_BRIDGE_CONFIG_MANAGED_DIR "${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}")
+else()
+  set(OPENMS_THERMO_BRIDGE_CONFIG_MANAGED_DIR "\${PACKAGE_PREFIX_DIR}/${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}")
 endif()
 
 if(OPENMS_THERMO_BRIDGE_BUILD_CLI)
@@ -331,12 +342,6 @@ install(EXPORT OpenMSThermoBridgeTargets
   NAMESPACE OpenMSThermoBridge::
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/OpenMSThermoBridge")
 
-# Package managers such as Nix pass an absolute CMAKE_INSTALL_LIBDIR; use it as is.
-if(IS_ABSOLUTE "${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}")
-  set(OPENMS_THERMO_BRIDGE_CONFIG_MANAGED_DIR "${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}")
-else()
-  set(OPENMS_THERMO_BRIDGE_CONFIG_MANAGED_DIR "\${PACKAGE_PREFIX_DIR}/${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}")
-endif()
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenMSThermoBridgeHelpers.cmake.in"
   "${CMAKE_CURRENT_BINARY_DIR}/OpenMSThermoBridgeHelpers.cmake"
