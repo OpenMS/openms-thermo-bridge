@@ -83,12 +83,11 @@ jobs:
         shell: bash
         run: cmake --install "${GITHUB_WORKSPACE}/build" --config Release --prefix "${GITHUB_WORKSPACE}/install"
 
-      # An installed executable with the static bridge must find
-      # <libdir>/openms_thermo_bridge/managed on its own. Shared builds are skipped because the
-      # installed thermo_host has no RPATH to the library, Windows because nethost.dll is not
-      # installed next to thermo_host.exe.
+      # An installed executable must find <libdir>/openms_thermo_bridge/managed on its own.
+      # Shared builds on Linux/macOS are skipped because the installed thermo_host has no RPATH
+      # to the library; on Windows the bridge DLL and nethost.dll are installed next to it.
       - name: Run installed thermo_host
-        if: runner.os != 'Windows' && matrix.shared == 'OFF'
+        if: matrix.shared == 'OFF' || runner.os == 'Windows'
         shell: bash
         run: |
           output="$("${GITHUB_WORKSPACE}/install/bin/thermo_host" "${GITHUB_WORKSPACE}/build/testdata/ginkgotoxin-ms-positive.raw")"
@@ -98,12 +97,13 @@ jobs:
       # Without nuget.org as a source, every package must come from the vendor feed. An empty
       # NUGET_PACKAGES keeps the packages restored by the build above out of it.
       - name: Build with OPENMS_THERMO_BRIDGE_NUGET_OFFLINE
-        if: runner.os == 'Linux' && matrix.shared == 'OFF'
+        if: matrix.shared == 'OFF'
         shell: bash
         run: |
           feed="${RUNNER_TEMP}/offline-feed"
           mkdir -p "${feed}"
-          find "${NUGET_PACKAGES:-${HOME}/.nuget/packages}" -name '*.nupkg' -exec cp {} "${feed}" \;
+          global_packages="$(dotnet nuget locals global-packages --list | tr -d '\r' | sed -n 's/^global-packages: //p')"
+          find "${global_packages}" -name '*.nupkg' -exec cp {} "${feed}" \;
           export NUGET_PACKAGES="${RUNNER_TEMP}/offline-nuget-packages"
           cmake -S "${GITHUB_WORKSPACE}" -B "${GITHUB_WORKSPACE}/build-offline" \
             -DOPENMS_THERMO_BRIDGE_NUGET_OFFLINE=ON \
@@ -113,4 +113,4 @@ jobs:
             echo "nuget.org is still a package source" >&2
             exit 1
           fi
-          cmake --build "${GITHUB_WORKSPACE}/build-offline" --parallel
+          cmake --build "${GITHUB_WORKSPACE}/build-offline" --config Release --parallel

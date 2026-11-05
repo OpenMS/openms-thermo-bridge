@@ -316,6 +316,11 @@ install(TARGETS openms_thermo_bridge EXPORT OpenMSThermoBridgeTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+# On Windows nethost is a DLL; install it next to the installed executables and the bridge
+# DLL so they can start.
+if(WIN32 AND DotNetHost_RUNTIME_LIBRARY)
+  install(FILES "${DotNetHost_RUNTIME_LIBRARY}" DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/" DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/openms_thermo_bridge/openms_thermo_bridge_export.h"
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/openms_thermo_bridge")
