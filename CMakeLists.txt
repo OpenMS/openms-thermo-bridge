@@ -245,6 +245,10 @@ cmake_path(ABSOLUTE_PATH OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR BASE_DIRECTORY
   NORMALIZE OUTPUT_VARIABLE _openms_thermo_bridge_full_managed_dir)
 file(RELATIVE_PATH OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED
   "${_openms_thermo_bridge_bindir}" "${_openms_thermo_bridge_full_managed_dir}")
+file(TO_CMAKE_PATH "${CMAKE_INSTALL_LIBDIR}" _openms_thermo_bridge_libdir)
+cmake_path(ABSOLUTE_PATH _openms_thermo_bridge_libdir BASE_DIRECTORY "${_openms_thermo_bridge_prefix}" NORMALIZE)
+file(RELATIVE_PATH _openms_thermo_bridge_bindir_to_libdir
+  "${_openms_thermo_bridge_bindir}" "${_openms_thermo_bridge_libdir}")
 target_compile_definitions(openms_thermo_bridge PRIVATE
   OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED="${OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED}")
 if(IS_ABSOLUTE "${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}")
@@ -262,6 +266,21 @@ if(OPENMS_THERMO_BRIDGE_BUILD_CLI)
   add_executable(thermo_host src/thermo_host_main.cpp)
   target_link_libraries(thermo_host PRIVATE openms_thermo_bridge)
   openms_thermo_bridge_copy_runtime_files(TARGET thermo_host)
+  # With a shared bridge, the installed thermo_host finds it in <libdir> through its RPATH.
+  # Windows needs none: the DLL is installed next to the executable.
+  get_target_property(_openms_thermo_bridge_type openms_thermo_bridge TYPE)
+  if(_openms_thermo_bridge_type STREQUAL "SHARED_LIBRARY" AND NOT WIN32)
+    if(APPLE)
+      set(_openms_thermo_bridge_rpath "@loader_path/${_openms_thermo_bridge_bindir_to_libdir}")
+    else()
+      set(_openms_thermo_bridge_rpath "$ORIGIN/${_openms_thermo_bridge_bindir_to_libdir}")
+    endif()
+    # An absolute libdir does not move with `cmake --install --prefix`; add it as is too.
+    if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
+      list(APPEND _openms_thermo_bridge_rpath "${_openms_thermo_bridge_libdir}")
+    endif()
+    set_target_properties(thermo_host PROPERTIES INSTALL_RPATH "${_openms_thermo_bridge_rpath}")
+  endif()
   install(TARGETS thermo_host RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 

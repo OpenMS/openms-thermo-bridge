@@ -83,11 +83,9 @@ jobs:
         shell: bash
         run: cmake --install "${GITHUB_WORKSPACE}/build" --config Release --prefix "${GITHUB_WORKSPACE}/install"
 
-      # An installed executable must find <libdir>/openms_thermo_bridge/managed on its own.
-      # Shared builds on Linux/macOS are skipped because the installed thermo_host has no RPATH
-      # to the library; on Windows the bridge DLL and nethost.dll are installed next to it.
+      # The installed executable must find the shared bridge (RPATH, or next to it on Windows),
+      # nethost.dll on Windows, and <libdir>/openms_thermo_bridge/managed on its own.
       - name: Run installed thermo_host
-        if: matrix.shared == 'OFF' || runner.os == 'Windows'
         shell: bash
         run: |
           output="$("${GITHUB_WORKSPACE}/install/bin/thermo_host" "${GITHUB_WORKSPACE}/build/testdata/ginkgotoxin-ms-positive.raw")"
