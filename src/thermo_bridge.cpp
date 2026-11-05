@@ -853,12 +853,22 @@ std::filesystem::path default_managed_directory()
     const auto exe_dir = executable_path().parent_path();
     candidates.push_back(exe_dir / "managed");
 
+    // Installed layout: the managed files live in <libdir>/openms_thermo_bridge/managed,
+    // while executables (and the bridge DLL on Windows) live in <bindir>. Set by CMake.
+    const std::filesystem::path bindir_to_managed(OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED);
+
     std::filesystem::path module;
-    if (try_module_path(module))
+    const bool have_module = try_module_path(module);
+    if (have_module)
     {
         const auto module_dir = module.parent_path();
         candidates.push_back(module_dir / "managed");
         candidates.push_back(module_dir / "openms_thermo_bridge" / "managed");
+    }
+    candidates.push_back((exe_dir / bindir_to_managed).lexically_normal());
+    if (have_module)
+    {
+        candidates.push_back((module.parent_path() / bindir_to_managed).lexically_normal());
     }
 
     for (const auto& candidate : candidates)

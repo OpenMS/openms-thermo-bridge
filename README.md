@@ -17,12 +17,13 @@ a typed, single-pass scan API. It contains breaking changes; see
 The project does **not** download the Thermo vendor packages by default.
 
 ### Option 1: provide the vendor `.nupkg` files yourself
-Place the following files in `vendor/thermo-feed` or point CMake at another directory with `-DOPENMS_THERMO_BRIDGE_VENDOR_DIR=/absolute/path`:
-- `ThermoFisher.CommonCore.BackgroundSubtraction.8.0.6.nupkg`
-- `ThermoFisher.CommonCore.Data.8.0.6.nupkg`
-- `ThermoFisher.CommonCore.MassPrecisionEstimator.8.0.6.nupkg`
-- `ThermoFisher.CommonCore.RandomAccessReaderPlugin.8.0.6.nupkg`
-- `ThermoFisher.CommonCore.RawfileReader.8.0.6.nupkg`
+Place the following files in `vendor/thermo-feed` or point CMake at another directory with `-DOPENMS_THERMO_BRIDGE_VENDOR_DIR=/absolute/path`.
+The names are lower case, as in the RawFileReader repository (`Libs/NetCore/Net8`), and the version follows `OPENMS_THERMO_BRIDGE_THERMO_VERSION`:
+- `thermofisher.commoncore.backgroundsubtraction.8.0.37.nupkg`
+- `thermofisher.commoncore.data.8.0.37.nupkg`
+- `thermofisher.commoncore.massprecisionestimator.8.0.37.nupkg`
+- `thermofisher.commoncore.randomaccessreaderplugin.8.0.37.nupkg`
+- `thermofisher.commoncore.rawfilereader.8.0.37.nupkg`
 
 Then configure and build:
 
@@ -62,6 +63,43 @@ cmake --build build --parallel
 ```
 
 For Linux convenience, `build_linux.sh` configures, builds, and runs the tests with the vendor-download option enabled.
+
+### Offline and sandboxed builds (Nix, Guix, distribution builders)
+
+`dotnet publish` restores NuGet packages. Besides the five Thermo packages it needs their
+dependencies from nuget.org (versions for RawFileReader 8.0.37):
+
+- `CommandLineParser` 2.9.1
+- `Microsoft.NETCore.Platforms` 5.0.0
+- `OpenMcdf` 2.3.0
+- `OpenMcdf.Extensions` 2.3.0.1
+- `System.IO.FileSystem.AccessControl` 5.0.0
+- `System.Runtime.CompilerServices.Unsafe` 6.0.0
+- `System.Security.AccessControl` 5.0.0
+- `System.Security.Principal.Windows` 5.0.0
+- `System.Text.Encoding.CodePages` 6.0.0
+
+By default the generated NuGet config lists nuget.org as a source, and a restore without network
+access fails with `NU1301`. To build offline:
+
+```bash
+cmake -S . -B build \
+  -DOPENMS_THERMO_BRIDGE_NUGET_OFFLINE=ON \
+  -DOPENMS_THERMO_BRIDGE_VENDOR_DIR=/path/to/feed \
+  -DBUILD_TESTING=OFF
+cmake --build build --parallel
+```
+
+With `OPENMS_THERMO_BRIDGE_NUGET_OFFLINE=ON`, nuget.org is not a source, so every package must be
+available locally: either as a `.nupkg` in the vendor directory, or in a local NuGet packages
+folder (`NUGET_PACKAGES`, `NUGET_FALLBACK_PACKAGES`). `BUILD_TESTING=OFF` skips the Catch2
+download and the sample RAW file; to build the tests offline, provide an installed Catch2 3 and
+set `OPENMS_THERMO_BRIDGE_DOWNLOAD_TEST_DATA=OFF`.
+
+In Nix, pass the packages as `buildInputs` built with `dotnetCorePackages.fetchNupkg`: the
+`dotnet-sdk` setup hook links them into `NUGET_FALLBACK_PACKAGES`. Point
+`OPENMS_THERMO_BRIDGE_VENDOR_DIR` at a directory holding the five Thermo `.nupkg` files.
+At runtime the bridge locates the .NET runtime through `DOTNET_ROOT`, so wrap executables with it.
 
 ## Test
 ```bash
@@ -114,7 +152,7 @@ target_link_libraries(my_tool PRIVATE OpenMSThermoBridge::openms_thermo_bridge)
 openms_thermo_bridge_copy_runtime_files(TARGET my_tool)
 ```
 
-At runtime the bridge first looks for `managed/` next to the executable, then next to the loaded `openms_thermo_bridge` binary, and also supports the installed package layout under `openms_thermo_bridge/managed`. That means:
+At runtime the bridge first looks for `managed/` next to the executable, then next to the loaded `openms_thermo_bridge` binary, and also supports the installed package layout: `openms_thermo_bridge/managed` next to the library, and `<libdir>/openms_thermo_bridge/managed` relative to the executable's (or, on Windows, the DLL's) `bin` directory, so installed executables such as `thermo_host` work with a static bridge too. That means:
 - build-tree consumers can stage runtime files next to their executable or shared library with `openms_thermo_bridge_copy_runtime_files()`
 - installed-package consumers can either stage the runtime files the same way or rely on the package's installed `lib/openms_thermo_bridge/managed` layout
 
@@ -126,7 +164,7 @@ If you bypass the helper and pass an explicit managed directory to `openms::ther
 - Platform-specific .NET `nethost` headers and library to build the native bridge; these usually come from the .NET SDK/host pack even when using pre-built managed artifacts
 - .NET 8 runtime for the final executable at runtime
 - A C++17 compiler
-- Network access to `api.nuget.org` and, when the relevant options are enabled, `raw.githubusercontent.com`
+- Network access to `api.nuget.org` (unless `OPENMS_THERMO_BRIDGE_NUGET_OFFLINE=ON`, see [Offline and sandboxed builds](#offline-and-sandboxed-builds-nix-guix-distribution-builders)) and, when the relevant options are enabled, `raw.githubusercontent.com`
 - Pre-built artifact downloads (`OPENMS_THERMO_BRIDGE_DOWNLOAD_PREBUILT_MANAGED=ON`) additionally require network access to `github.com`
 
 ## Licenses

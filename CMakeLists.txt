@@ -12,6 +12,9 @@ option(OPENMS_THERMO_BRIDGE_BUILD_CLI "Build the thermo_host CLI executable." ON
 option(OPENMS_THERMO_BRIDGE_BUILD_BENCH "Build the thermo_bridge_bench benchmark/parity tool (local use)." OFF)
 option(OPENMS_THERMO_BRIDGE_ENABLE_VENDOR_DOWNLOAD "Download Thermo vendor packages during the build." OFF)
 set(OPENMS_THERMO_BRIDGE_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/thermo-feed" CACHE PATH "Directory containing the Thermo vendor .nupkg files.")
+option(OPENMS_THERMO_BRIDGE_NUGET_OFFLINE
+  "Do not use nuget.org when restoring the managed bridge. All NuGet packages must then come from OPENMS_THERMO_BRIDGE_VENDOR_DIR or from local NuGet package folders (sandboxed/offline builds)."
+  OFF)
 set(OPENMS_THERMO_BRIDGE_THERMO_COMMIT "80963674b5c10e58236da63023ad6fa0264bbb00" CACHE STRING "RawFileReader commit used for vendor package snapshots.")
 set(OPENMS_THERMO_BRIDGE_THERMO_VERSION "8.0.37" CACHE STRING "Thermo RawFileReader package version.")
 set(OPENMS_THERMO_BRIDGE_SAMPLE_RAW_URL "https://raw.githubusercontent.com/HegemanLab/small-thermo-raw-file-examples/cfac6a25b44913273dd458d5f5db9b20b0c1107d/ginkgotoxin-ms-positive.raw" CACHE STRING "Public sample RAW file used by the test suite.")
@@ -143,9 +146,14 @@ if(NOT OPENMS_THERMO_BRIDGE_PREBUILT_MANAGED_DIR)
       "${OPENMS_THERMO_BRIDGE_MANAGED_DIR}/ThermoWrapperManaged.runtimeconfig.json")
 
   file(TO_CMAKE_PATH "${OPENMS_THERMO_BRIDGE_VENDOR_DIR}" OPENMS_THERMO_BRIDGE_VENDOR_DIR_CMAKE_PATH)
+  if(OPENMS_THERMO_BRIDGE_NUGET_OFFLINE)
+    set(OPENMS_THERMO_BRIDGE_NUGET_ORG_SOURCE "")
+  else()
+    set(OPENMS_THERMO_BRIDGE_NUGET_ORG_SOURCE "    <add key=\"nuget.org\" value=\"https://api.nuget.org/v3/index.json\" />\n")
+  endif()
   file(CONFIGURE
     OUTPUT "${OPENMS_THERMO_BRIDGE_NUGET_CONFIG}"
-    CONTENT "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<configuration>\n  <packageSources>\n    <clear />\n    <add key=\"openms-thermo-bridge-vendor\" value=\"@OPENMS_THERMO_BRIDGE_VENDOR_DIR_CMAKE_PATH@\" />\n    <add key=\"nuget.org\" value=\"https://api.nuget.org/v3/index.json\" />\n  </packageSources>\n</configuration>\n"
+    CONTENT "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<configuration>\n  <packageSources>\n    <clear />\n    <add key=\"openms-thermo-bridge-vendor\" value=\"@OPENMS_THERMO_BRIDGE_VENDOR_DIR_CMAKE_PATH@\" />\n@OPENMS_THERMO_BRIDGE_NUGET_ORG_SOURCE@  </packageSources>\n</configuration>\n"
     @ONLY)
 
   include(OpenMSThermoBridgeFunctions)
@@ -223,6 +231,16 @@ if(NOT WIN32)
 endif()
 add_dependencies(openms_thermo_bridge openms_thermo_bridge_managed)
 
+# Install location of the managed files. The bridge also searches it relative to the
+# bin directory, so an installed executable with the static bridge (or the bridge DLL
+# on Windows, which installs to bin) finds it.
+set(OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR "${CMAKE_INSTALL_LIBDIR}/openms_thermo_bridge/managed")
+file(RELATIVE_PATH OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED
+  "${CMAKE_INSTALL_FULL_BINDIR}"
+  "${CMAKE_INSTALL_FULL_LIBDIR}/openms_thermo_bridge/managed")
+target_compile_definitions(openms_thermo_bridge PRIVATE
+  OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED="${OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED}")
+
 if(OPENMS_THERMO_BRIDGE_BUILD_CLI)
   add_executable(thermo_host src/thermo_host_main.cpp)
   target_link_libraries(thermo_host PRIVATE openms_thermo_bridge)
@@ -295,14 +313,19 @@ install(TARGETS openms_thermo_bridge EXPORT OpenMSThermoBridgeTargets
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/" DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/openms_thermo_bridge/openms_thermo_bridge_export.h"
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/openms_thermo_bridge")
-install(DIRECTORY "${OPENMS_THERMO_BRIDGE_MANAGED_DIR}/" DESTINATION "${CMAKE_INSTALL_LIBDIR}/openms_thermo_bridge/managed")
+install(DIRECTORY "${OPENMS_THERMO_BRIDGE_MANAGED_DIR}/" DESTINATION "${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}")
 
 install(EXPORT OpenMSThermoBridgeTargets
   FILE OpenMSThermoBridgeTargets.cmake
   NAMESPACE OpenMSThermoBridge::
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/OpenMSThermoBridge")
 
-set(OPENMS_THERMO_BRIDGE_CONFIG_MANAGED_DIR "\${PACKAGE_PREFIX_DIR}/${CMAKE_INSTALL_LIBDIR}/openms_thermo_bridge/managed")
+# Package managers such as Nix pass an absolute CMAKE_INSTALL_LIBDIR; use it as is.
+if(IS_ABSOLUTE "${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}")
+  set(OPENMS_THERMO_BRIDGE_CONFIG_MANAGED_DIR "${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}")
+else()
+  set(OPENMS_THERMO_BRIDGE_CONFIG_MANAGED_DIR "\${PACKAGE_PREFIX_DIR}/${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}")
+endif()
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenMSThermoBridgeHelpers.cmake.in"
   "${CMAKE_CURRENT_BINARY_DIR}/OpenMSThermoBridgeHelpers.cmake"
