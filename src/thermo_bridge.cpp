@@ -870,6 +870,9 @@ std::filesystem::path default_managed_directory()
     {
         candidates.push_back((module.parent_path() / bindir_to_managed).lexically_normal());
     }
+#ifdef OPENMS_THERMO_BRIDGE_ABSOLUTE_MANAGED_DIR
+    candidates.push_back(std::filesystem::path(OPENMS_THERMO_BRIDGE_ABSOLUTE_MANAGED_DIR));
+#endif
 
     for (const auto& candidate : candidates)
     {

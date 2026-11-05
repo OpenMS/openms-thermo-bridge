@@ -240,6 +240,12 @@ file(RELATIVE_PATH OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED
   "${CMAKE_INSTALL_FULL_LIBDIR}/openms_thermo_bridge/managed")
 target_compile_definitions(openms_thermo_bridge PRIVATE
   OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED="${OPENMS_THERMO_BRIDGE_BINDIR_TO_MANAGED}")
+# An absolute libdir does not move with `cmake --install --prefix`, so search it as is too.
+if(IS_ABSOLUTE "${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}")
+  file(TO_CMAKE_PATH "${OPENMS_THERMO_BRIDGE_INSTALL_MANAGED_DIR}" _openms_thermo_bridge_absolute_managed_dir)
+  target_compile_definitions(openms_thermo_bridge PRIVATE
+    OPENMS_THERMO_BRIDGE_ABSOLUTE_MANAGED_DIR="${_openms_thermo_bridge_absolute_managed_dir}")
+endif()
 
 if(OPENMS_THERMO_BRIDGE_BUILD_CLI)
   add_executable(thermo_host src/thermo_host_main.cpp)

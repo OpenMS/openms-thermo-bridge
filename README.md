@@ -91,8 +91,9 @@ cmake --build build --parallel
 ```
 
 With `OPENMS_THERMO_BRIDGE_NUGET_OFFLINE=ON`, nuget.org is not a source, so every package must be
-available locally: either as a `.nupkg` in the vendor directory, or in a local NuGet packages
-folder (`NUGET_PACKAGES`, `NUGET_FALLBACK_PACKAGES`). `BUILD_TESTING=OFF` skips the Catch2
+available locally. The five Thermo `.nupkg` files must always be in the vendor directory (the
+build checks for them there). Their nuget.org dependencies can be there as well, or in a local
+NuGet packages folder (`NUGET_PACKAGES`, `NUGET_FALLBACK_PACKAGES`). `BUILD_TESTING=OFF` skips the Catch2
 download and the sample RAW file; to build the tests offline, provide an installed Catch2 3 and
 set `OPENMS_THERMO_BRIDGE_DOWNLOAD_TEST_DATA=OFF`.
 
