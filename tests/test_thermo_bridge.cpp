@@ -973,6 +973,9 @@ TEST_CASE("trailer layout gives typed values matching the formatted trailers")
     CHECK(header.trailer_bools.size() == layout.bool_count);
     CHECK(header.trailer_strings.size() == layout.string_count);
     REQUIRE(header.trailer_text.size() == layout.labels.size());
+    CHECK(header.trailer_text_labels.empty()); // this file lists every layout field in every scan
+    CHECK(header.trailer_text_label(layout, static_cast<std::size_t>(injection)) == "Ion Injection Time (ms):");
+    CHECK_THROWS_AS(header.trailer_text_label(layout, header.trailer_text.size()), std::out_of_range);
     CHECK(header.trailer_text[static_cast<std::size_t>(injection)] == raw.trailer_extra_value(s, "Ion Injection Time (ms):"));
 
     const double injection_text = std::stod(raw.trailer_extra_value(s, "Ion Injection Time (ms):"));
@@ -990,6 +993,43 @@ TEST_CASE("trailer layout gives typed values matching the formatted trailers")
     const auto bare = raw.read_scan(s, no_trailers).header;
     CHECK(bare.trailer_doubles.empty());
     CHECK_THROWS_AS(bare.trailer_double(layout, injection), std::out_of_range);
+}
+
+TEST_CASE("trailer text is paired with the vendor's own labels of every scan")
+{
+    // RawFileReader's GetTrailerExtraInformation() lists only the fields that apply to a scan. Some
+    // instruments (e.g. Orbitrap Ascend) leave out layout fields, so trailer_text can be shorter than
+    // the layout; trailer_text_label() must then give the labels the vendor returned with the values.
+    TestFile tf;
+    auto& raw = *tf.file;
+    const auto& layout = raw.trailer_layout();
+    tb::ReadOptions options;
+    options.peaks = false;
+    options.trailers = false;
+    options.trailer_text = true;
+    tb::ScanBatch batch;
+    raw.read_scans(raw.first_scan_number(), raw.last_scan_number(), batch, options);
+    REQUIRE(!batch.headers.empty());
+    const auto trimmed = [](const std::string& v) {
+        const auto b = v.find_first_not_of(" \t");
+        return b == std::string::npos ? std::string() : v.substr(b, v.find_last_not_of(" \t") - b + 1);
+    };
+    for (const auto& header : batch.headers)
+    {
+        const auto vendor_labels = raw.trailer_extra_labels(header.scan_number);
+        REQUIRE(header.trailer_text.size() == vendor_labels.size());
+        bool layout_order = vendor_labels.size() == layout.labels.size();
+        for (std::size_t i = 0; layout_order && i < vendor_labels.size(); ++i)
+            layout_order = vendor_labels[i] == layout.labels[i].label;
+        CHECK(header.trailer_text_labels.empty() == layout_order);
+        for (std::size_t i = 0; i < vendor_labels.size(); ++i)
+        {
+            CHECK(header.trailer_text_label(layout, i) == vendor_labels[i]);
+            const bool first = std::find(vendor_labels.begin(), vendor_labels.begin() + static_cast<std::ptrdiff_t>(i),
+                                         vendor_labels[i]) == vendor_labels.begin() + static_cast<std::ptrdiff_t>(i);
+            if (first) CHECK(raw.trailer_extra_value(header.scan_number, vendor_labels[i]) == trimmed(header.trailer_text[i]));
+        }
+    }
 }
 
 TEST_CASE("set_trailer_selection limits which trailer values are read")

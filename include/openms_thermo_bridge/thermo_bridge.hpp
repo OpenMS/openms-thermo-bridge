@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#define OPENMS_THERMO_BRIDGE_API_VERSION 1
+#define OPENMS_THERMO_BRIDGE_API_VERSION 2  // 2: ScanHeader::trailer_text_labels
 
 namespace openms::thermo_bridge
 {
@@ -156,11 +156,31 @@ struct ScanHeader
     std::vector<std::int64_t> trailer_ints;
     std::vector<std::uint8_t> trailer_bools;
     std::vector<std::string> trailer_strings;
-    /// Vendor-formatted trailer strings in label order (v0.3 JSON values),
-    /// only filled when ReadOptions::trailer_text is set.
+    /// Vendor-formatted trailer strings (v0.3 JSON values), only filled when
+    /// ReadOptions::trailer_text is set. RawFileReader lists only the fields that
+    /// apply to the scan: usually all TrailerLayout labels in layout order, but some
+    /// instruments (e.g. Orbitrap Ascend) leave fields out, such as "Charge State:"
+    /// in MS1 scans. Pair the values with trailer_text_label(), not by layout index.
     std::vector<std::string> trailer_text;
+    /// Labels of trailer_text if they are not the TrailerLayout labels (fields left
+    /// out by the vendor), else empty. Same size as trailer_text when filled.
+    std::vector<std::string> trailer_text_labels;
 
     int ms_level() const { return static_cast<int>(ms_order); }
+
+    /// Label of trailer_text[index]: trailer_text_labels[index] if the scan has its own labels, else the
+    /// layout label. Throws std::out_of_range for an index outside trailer_text.
+    const std::string& trailer_text_label(const TrailerLayout& layout, std::size_t index) const
+    {
+        if (index >= trailer_text.size()) throw std::out_of_range("trailer text index out of range");
+        if (!trailer_text_labels.empty())
+        {
+            if (index >= trailer_text_labels.size()) throw std::out_of_range("trailer text label missing");
+            return trailer_text_labels[index];
+        }
+        if (index >= layout.labels.size()) throw std::out_of_range("trailer text label missing");
+        return layout.labels[index].label;
+    }
 
     /// "controllerType=T controllerNumber=N scan=S" (Thermo nativeID format).
     std::string native_id() const
