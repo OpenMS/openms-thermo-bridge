@@ -1009,15 +1009,17 @@ std::vector<int> check_trailer_text_labels(const tb::RawFile& raw, int first, in
     options.trailer_text = true;
     tb::ScanBatch batch;
     raw.read_scans(first, last, batch, options);
-    REQUIRE(!batch.headers.empty());
+    REQUIRE(batch.size() == static_cast<std::size_t>(last - first + 1));
     const auto trimmed = [](const std::string& v) {
         const auto b = v.find_first_not_of(" \t");
         return b == std::string::npos ? std::string() : v.substr(b, v.find_last_not_of(" \t") - b + 1);
     };
     tb::Spectrum spectrum;
     std::vector<int> own_labels;
+    int scan = first;
     for (const auto& header : batch.headers)
     {
+        REQUIRE(header.scan_number == scan++);
         INFO("scan " << header.scan_number);
         const auto vendor_labels = raw.trailer_extra_labels(header.scan_number);
         REQUIRE(header.trailer_text.size() == vendor_labels.size());
