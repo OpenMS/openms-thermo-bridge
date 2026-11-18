@@ -973,6 +973,9 @@ TEST_CASE("trailer layout gives typed values matching the formatted trailers")
     CHECK(header.trailer_bools.size() == layout.bool_count);
     CHECK(header.trailer_strings.size() == layout.string_count);
     REQUIRE(header.trailer_text.size() == layout.labels.size());
+    CHECK(header.trailer_text_labels.empty()); // this file lists every layout field in every scan
+    CHECK(header.trailer_text_label(layout, static_cast<std::size_t>(injection)) == "Ion Injection Time (ms):");
+    CHECK_THROWS_AS(header.trailer_text_label(layout, header.trailer_text.size()), std::out_of_range);
     CHECK(header.trailer_text[static_cast<std::size_t>(injection)] == raw.trailer_extra_value(s, "Ion Injection Time (ms):"));
 
     const double injection_text = std::stod(raw.trailer_extra_value(s, "Ion Injection Time (ms):"));
@@ -990,6 +993,130 @@ TEST_CASE("trailer layout gives typed values matching the formatted trailers")
     const auto bare = raw.read_scan(s, no_trailers).header;
     CHECK(bare.trailer_doubles.empty());
     CHECK_THROWS_AS(bare.trailer_double(layout, injection), std::out_of_range);
+}
+
+namespace
+{
+// The trailer text of the scans first..last must be paired with the labels the vendor returned with the
+// values, in a batch (read_scans) and in a Spectrum that is reused for every scan (read_scan). Returns the
+// scans that have their own labels because they do not list exactly the layout fields.
+std::vector<int> check_trailer_text_labels(const tb::RawFile& raw, int first, int last)
+{
+    const auto& layout = raw.trailer_layout();
+    tb::ReadOptions options;
+    options.peaks = false;
+    options.trailers = false;
+    options.trailer_text = true;
+    tb::ScanBatch batch;
+    raw.read_scans(first, last, batch, options);
+    REQUIRE(!batch.headers.empty());
+    const auto trimmed = [](const std::string& v) {
+        const auto b = v.find_first_not_of(" \t");
+        return b == std::string::npos ? std::string() : v.substr(b, v.find_last_not_of(" \t") - b + 1);
+    };
+    tb::Spectrum spectrum;
+    std::vector<int> own_labels;
+    for (const auto& header : batch.headers)
+    {
+        INFO("scan " << header.scan_number);
+        const auto vendor_labels = raw.trailer_extra_labels(header.scan_number);
+        REQUIRE(header.trailer_text.size() == vendor_labels.size());
+        bool layout_order = vendor_labels.size() == layout.labels.size();
+        for (std::size_t i = 0; layout_order && i < vendor_labels.size(); ++i)
+            layout_order = vendor_labels[i] == layout.labels[i].label;
+        CHECK(header.trailer_text_labels == (layout_order ? std::vector<std::string>{} : vendor_labels));
+        if (!header.trailer_text_labels.empty()) own_labels.push_back(header.scan_number);
+        for (std::size_t i = 0; i < vendor_labels.size(); ++i)
+        {
+            CHECK(header.trailer_text_label(layout, i) == vendor_labels[i]);
+            const bool first_of_label = std::find(vendor_labels.begin(), vendor_labels.begin() + static_cast<std::ptrdiff_t>(i),
+                                                  vendor_labels[i]) == vendor_labels.begin() + static_cast<std::ptrdiff_t>(i);
+            if (first_of_label)
+                CHECK(raw.trailer_extra_value(header.scan_number, vendor_labels[i]) == trimmed(header.trailer_text[i]));
+        }
+        raw.read_scan(header.scan_number, spectrum, options);
+        CHECK(spectrum.header.trailer_text == header.trailer_text);
+        CHECK(spectrum.header.trailer_text_labels == header.trailer_text_labels);
+    }
+    return own_labels;
+}
+} // namespace
+
+TEST_CASE("trailer text is paired with the vendor's own labels of every scan")
+{
+    // RawFileReader's GetTrailerExtraInformation() lists only the fields that apply to a scan. Some
+    // instruments (e.g. Orbitrap Ascend) leave out layout fields, so trailer_text can be shorter than
+    // the layout; trailer_text_label() must then give the labels the vendor returned with the values.
+    TestFile tf;
+    check_trailer_text_labels(*tf.file, tf.file->first_scan_number(), tf.file->last_scan_number());
+}
+
+TEST_CASE("trailer text keeps the vendor's labels for scans that leave out layout fields")
+{
+    // Optional fixture: a RAW file whose scans do not list every field of the trailer layout, e.g. of an
+    // Orbitrap Ascend (PXD065289). The public sample lists every layout field in every scan.
+    const char* path = std::getenv("OPENMS_THERMO_BRIDGE_TEST_TRAILER_SUBSET_RAW");
+    if (!path || !*path)
+        SKIP("Set OPENMS_THERMO_BRIDGE_TEST_TRAILER_SUBSET_RAW to a RAW fixture whose scans leave out trailer fields");
+    tb::RawFile raw(path);
+    // 200 scans from the middle of the run, where MS1 and MSn scans (which leave out different fields) alternate.
+    const int first = raw.first_scan_number() + std::max(0, raw.scan_count() - 200) / 2;
+    const int last = std::min(raw.last_scan_number(), first + 199);
+    const auto own_labels = check_trailer_text_labels(raw, first, last);
+    REQUIRE(!own_labels.empty());
+
+    // A reused Spectrum does not keep the labels for a read without trailer text ...
+    tb::ReadOptions text;
+    text.peaks = false;
+    text.trailers = false;
+    text.trailer_text = true;
+    tb::ReadOptions no_text = text;
+    no_text.trailer_text = false;
+    tb::Spectrum spectrum;
+    raw.read_scan(own_labels.front(), spectrum, text);
+    REQUIRE(!spectrum.header.trailer_text_labels.empty());
+    raw.read_scan(own_labels.front(), spectrum, no_text);
+    CHECK(spectrum.header.trailer_text.empty());
+    CHECK(spectrum.header.trailer_text_labels.empty());
+
+    // ... or for a scan that lists every layout field (of the public sample).
+    const auto sample = sample_raw_path();
+    if (!sample.empty() && std::filesystem::exists(sample))
+    {
+        tb::RawFile full(sample);
+        raw.read_scan(own_labels.front(), spectrum, text);
+        REQUIRE(!spectrum.header.trailer_text_labels.empty());
+        full.read_scan(full.first_scan_number(), spectrum, text);
+        CHECK(spectrum.header.trailer_text.size() == full.trailer_layout().labels.size());
+        CHECK(spectrum.header.trailer_text_labels.empty());
+    }
+}
+
+TEST_CASE("trailer_text_label gives the scan's own labels instead of the layout labels")
+{
+    // Needs no RAW file: a scan that leaves out the middle field of a layout with three fields.
+    tb::TrailerLayout layout;
+    for (const char* label : {"Ion Injection Time (ms):", "Charge State:", "Monoisotopic M/Z:"})
+    {
+        layout.labels.emplace_back();
+        layout.labels.back().label = label;
+    }
+    tb::ScanHeader header;
+    header.trailer_text = {"64.000", "445.1200"};
+    header.trailer_text_labels = {"Ion Injection Time (ms):", "Monoisotopic M/Z:"};
+    CHECK(header.trailer_text_label(layout, 0) == "Ion Injection Time (ms):");
+    CHECK(header.trailer_text_label(layout, 1) == "Monoisotopic M/Z:"); // by layout index: "Charge State:"
+    CHECK_THROWS_AS(header.trailer_text_label(layout, 2), std::out_of_range);
+
+    // Own labels that do not cover every value are not filled up with layout labels.
+    header.trailer_text_labels.pop_back();
+    CHECK_THROWS_AS(header.trailer_text_label(layout, 1), std::out_of_range);
+
+    // Without own labels the values are in layout order.
+    header.trailer_text_labels.clear();
+    CHECK(header.trailer_text_label(layout, 1) == "Charge State:");
+    header.trailer_text.resize(4);
+    CHECK_THROWS_AS(header.trailer_text_label(layout, 3), std::out_of_range);
 }
 
 TEST_CASE("set_trailer_selection limits which trailer values are read")

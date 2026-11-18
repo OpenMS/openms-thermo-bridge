@@ -224,8 +224,12 @@ for (int n = raw.first_scan_number(); n <= raw.last_scan_number(); ++n)
   only the value arrays (`trailer_doubles/ints/bools/strings`). Look up a label
   index once with `layout.find(label)`, then use `trailer_double/int/bool/string`
   or `trailer_as_double`. `set_trailer_selection` skips parsing labels you do
-  not need; slots stay stable. Labels and the vendor-formatted strings are
-  returned only if `ReadOptions::trailer_text` is set.
+  not need; slots stay stable. The vendor-formatted strings (`trailer_text`)
+  are returned only if `ReadOptions::trailer_text` is set. They hold only the
+  fields that apply to the scan: some instruments (e.g. Orbitrap Ascend) leave
+  out layout fields, such as `Charge State:` in MS1 scans, and then
+  `trailer_text_labels` holds the scan's own labels. Pair the strings with
+  `h.trailer_text_label(layout, i)`, never by layout index.
 - **Batches.** `read_scans(first, last)` reads an inclusive scan range in one
   call into a `ScanBatch`, which packs the peaks into flat arrays with
   `peak_offsets` (size n+1) and also has offsets for charges and noise.

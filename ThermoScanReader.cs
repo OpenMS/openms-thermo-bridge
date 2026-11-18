@@ -78,6 +78,7 @@ namespace ThermoWrapperManaged
         public const int TrailerBools = 11;   // byte[]
         public const int TrailerStrings = 12; // packed UTF-8, every value NUL-terminated
         public const int TrailerText = 13;    // packed UTF-8, every value NUL-terminated
+        public const int TrailerTextLabels = 14; // packed UTF-8 labels of TrailerText, only if not the layout labels
         public const int LayoutLabels = 20;   // NativeTrailerLabel[]
         public const int LayoutNames = 21;    // packed UTF-8, every label NUL-terminated
     }
@@ -192,7 +193,8 @@ namespace ThermoWrapperManaged
                 if (firstScan > lastScan || firstScan < header.FirstSpectrum || lastScan > header.LastSpectrum)
                     return Err.BadScan;
                 var sink = new Allocator(alloc, ctx);
-                var layout = (flags & ReadFlags.Trailers) != 0 && selected.Type == Device.MS
+                // Typed trailers are written by layout slot; trailer text is compared with the layout labels.
+                var layout = (flags & (ReadFlags.Trailers | ReadFlags.TrailerText)) != 0 && selected.Type == Device.MS
                     ? Layout(entry, selected) : null;
                 for (int scan = firstScan; scan <= lastScan; ++scan)
                     ReadScan(rf, selected, scan, flags, layout, sink);
@@ -267,12 +269,29 @@ namespace ThermoWrapperManaged
             if (noises != null) sink.Doubles(Sink.NoiseIntensities, noises);
             if (baselines != null) sink.Doubles(Sink.NoiseBaselines, baselines);
 
-            if (layout != null) WriteTrailers(rf, scanNumber, layout, sink);
+            if (layout != null && (flags & ReadFlags.Trailers) != 0) WriteTrailers(rf, scanNumber, layout, sink);
             if ((flags & ReadFlags.TrailerText) != 0 && isMs)
             {
+                // GetTrailerExtraInformation lists only the fields that apply to the scan. Some instruments
+                // (e.g. Orbitrap Ascend) leave out fields of the layout, such as "Charge State:" in MS1 scans,
+                // so the values are not always in layout order: their own labels are sent along then.
                 var extra = rf.GetTrailerExtraInformation(scanNumber);
-                if (extra?.Values != null) sink.Packed(Sink.TrailerText, extra.Values);
+                if (extra?.Values != null)
+                {
+                    sink.Packed(Sink.TrailerText, extra.Values);
+                    if (layout != null && !SameLabels(extra.Labels, layout.Labels))
+                        sink.Packed(Sink.TrailerTextLabels, extra.Labels ?? Array.Empty<string>());
+                }
             }
+        }
+
+        /// True if the labels of GetTrailerExtraInformation are exactly the layout labels.
+        private static bool SameLabels(string[]? labels, string[] layout)
+        {
+            if (labels == null || labels.Length != layout.Length) return false;
+            for (int i = 0; i < labels.Length; ++i)
+                if (!string.Equals(labels[i] ?? "", layout[i], StringComparison.Ordinal)) return false;
+            return true;
         }
 
         // Same representation choice as v0.3 SpectrumArrays: native centroid stream if present,

@@ -591,6 +591,7 @@ enum SinkKind : std::int32_t
     kHeader = 0, kFilter = 1, kReactions = 2, kMz = 3, kIntensities = 4, kCharges = 5,
     kNoiseMz = 6, kNoiseIntensities = 7, kNoiseBaselines = 8,
     kTrailerDoubles = 9, kTrailerInts = 10, kTrailerBools = 11, kTrailerStrings = 12, kTrailerText = 13,
+    kTrailerTextLabels = 14,
     kLayoutLabels = 20, kLayoutNames = 21
 };
 
@@ -623,6 +624,7 @@ struct ScanStage
     std::vector<NativeReaction> reactions;
     std::string trailer_strings;
     std::string trailer_text;
+    std::string trailer_text_labels;
     bool active = false;
 
     void begin()
@@ -631,6 +633,7 @@ struct ScanStage
         reactions.clear();
         trailer_strings.clear();
         trailer_text.clear();
+        trailer_text_labels.clear();
         active = true;
     }
 
@@ -671,6 +674,7 @@ struct ScanStage
         }
         unpack_strings(trailer_strings, h.trailer_strings);
         unpack_strings(trailer_text, h.trailer_text);
+        unpack_strings(trailer_text_labels, h.trailer_text_labels);
         active = false;
     }
 };
@@ -721,6 +725,9 @@ struct SpectrumSink
         case kTrailerBools: return grow(h.trailer_bools, count);
         case kTrailerStrings: stage.trailer_strings.resize(static_cast<std::size_t>(count)); return stage.trailer_strings.data();
         case kTrailerText: stage.trailer_text.resize(static_cast<std::size_t>(count)); return stage.trailer_text.data();
+        case kTrailerTextLabels:
+            stage.trailer_text_labels.resize(static_cast<std::size_t>(count));
+            return stage.trailer_text_labels.data();
         default: return nullptr;
         }
     }
@@ -772,6 +779,9 @@ struct BatchSink
         case kTrailerBools: return grow(out.headers.back().trailer_bools, count);
         case kTrailerStrings: stage.trailer_strings.resize(static_cast<std::size_t>(count)); return stage.trailer_strings.data();
         case kTrailerText: stage.trailer_text.resize(static_cast<std::size_t>(count)); return stage.trailer_text.data();
+        case kTrailerTextLabels:
+            stage.trailer_text_labels.resize(static_cast<std::size_t>(count));
+            return stage.trailer_text_labels.data();
         default: return nullptr;
         }
     }
