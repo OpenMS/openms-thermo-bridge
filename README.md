@@ -6,6 +6,10 @@ Version 1.0.0 (`OPENMS_THERMO_BRIDGE_API_VERSION 1`) is a performance redesign w
 a typed, single-pass scan API. It contains breaking changes; see
 [Migrating from 0.3.x](#migrating-from-03x).
 
+Version 1.1.0 (`OPENMS_THERMO_BRIDGE_API_VERSION 2`) adds `ScanHeader::trailer_text_labels`
+for scans that leave out trailer fields (e.g. Orbitrap Ascend). Code written for 1.0.0
+compiles unchanged, but the native and managed parts must both be 1.1.0.
+
 ## What This Does
 - Builds a native bridge library and the `thermo_host` CLI with CMake
 - Publishes a managed bridge with `UnmanagedCallersOnly` entry points, resolved once per process
@@ -181,6 +185,7 @@ license (`License.doc` in https://github.com/thermofisherlsms/RawFileReader).
 - [x] Catch2/CTest integration tests
 - [x] Exported CMake package config
 - [x] Single-pass typed scan API, batch reads and thread accessors (1.0.0)
+- [x] Trailer text labels of scans that leave out layout fields (1.1.0)
 
 ## mzML metadata API
 

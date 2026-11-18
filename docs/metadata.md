@@ -95,5 +95,6 @@ that read it never get a scan with `ScanHeader::trailer_text_labels`.
 Set `OPENMS_THERMO_BRIDGE_TEST_TRAILER_SUBSET_RAW` to a RAW file whose scans
 leave out layout fields (for example an Orbitrap Ascend file of PXD065289) when
 running `thermo_bridge_tests` to compare the trailer text of `read_scan` and
-`read_scans` with the vendor's own label/value pairs. This optional fixture is
-not downloaded automatically.
+`read_scans` with the vendor's own label/value pairs. The test reads 200 scans
+from the middle of the run (every scan of a shorter run), so scans there must
+leave out fields. This optional fixture is not downloaded automatically.
