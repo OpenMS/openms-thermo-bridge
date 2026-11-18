@@ -85,3 +85,15 @@ Set `OPENMS_THERMO_BRIDGE_TEST_MSN_RAW` to an LTQ MSn fixture (for example
 `ThermoRawFileParserTest/Data/small.RAW`) when running `thermo_bridge_tests` to
 exercise the low-resolution fallback. This optional fixture is not downloaded
 automatically.
+
+## Trailer label regression test
+
+RawFileReader lists only the trailer fields that apply to a scan. The public
+sample lists every field of the trailer layout in every scan, so the tests
+that read it never get a scan with `ScanHeader::trailer_text_labels`.
+
+Set `OPENMS_THERMO_BRIDGE_TEST_TRAILER_SUBSET_RAW` to a RAW file whose scans
+leave out layout fields (for example an Orbitrap Ascend file of PXD065289) when
+running `thermo_bridge_tests` to compare the trailer text of `read_scan` and
+`read_scans` with the vendor's own label/value pairs. This optional fixture is
+not downloaded automatically.
